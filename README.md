@@ -23,15 +23,16 @@ page.
 
 The project currently has the FastAPI scaffold, typed request parsing, error
 mapping, response classification, direct Google Lens request construction,
-MrScraper HTML fetch wiring, local `.env` parsing, and dependency metadata.
+MrScraper HTML fetch wiring, local `.env` parsing, fixture coverage, and
+dependency metadata.
 
-The live request shape has been verified through the Google Lens redirect to a
-Google Search `udm=26` page and the Exact Match `udm=48` tab URL. The current
-local environment is still not ready for challenge submission because direct
-Google traffic and the configured MrScraper token path return Google block/error
-HTML for the tested samples. Provide a working residential proxy or provider
-configuration, then re-run live verification before claiming submission-ready
-coverage.
+The live MrScraper API-token path has been verified for Google Lens Exact Match:
+the service submits a minimal Lens `uploadbyurl` request, receives the Google
+Search Lens page, follows the Exact Match `udm=48` tab link, and returns the raw
+Exact Match HTML. Direct non-provider Google traffic may still return Google
+block pages from local or datacenter networks. The residential proxy path is
+implemented but should be separately verified with working proxy credentials
+before claiming it as a supported deployment mode.
 
 ## Endpoint
 
@@ -171,7 +172,8 @@ The API reads these optional environment variables:
 - `USER_AGENT`: user agent sent upstream.
 - `MRSCRAPER_API_KEY`: optional MrScraper Scraper API token. When present, the
   app asks MrScraper's HTML fetch endpoint to fetch the Google Lens URL with
-  `token`, `timeout`, `geoCode=US`, `url`, and `blockResources=false`.
+  `token`, `html=true`, `super=true`, and `url`. This API-token mode takes
+  precedence over residential proxy settings when both are configured.
 - `MRSCRAPER_API_URL`: optional MrScraper Scraper API endpoint. Defaults to
   `https://api.mrscraper.com`.
 - `PROXY_URL`: optional generic proxy URL for outbound Google requests. This
@@ -222,8 +224,8 @@ export MRSCRAPER_PROXY_SESSION_MINUTES='20'
 ```
 
 MrScraper has two relevant integration surfaces. The HTML fetch API uses an API
-token query parameter plus render options such as `timeout`, `geoCode`,
-`url=<target>`, and `blockResources`. The Residential Proxy product uses
+token query parameter plus render options such as `html=true`, `super=true`,
+and `url=<target>`. The Residential Proxy product uses
 `proxy.mrscraper.com:10000` and username modifiers such as
 `-country-us`, `-mobile-country-us`, and `-sessid-lens1`. For an API token like
 `atk_...`, use `MRSCRAPER_API_KEY` rather than the residential
