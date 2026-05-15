@@ -22,11 +22,16 @@ page.
 ## Status
 
 The project currently has the FastAPI scaffold, typed request parsing, error
-mapping, response classification scaffolding, and dependency metadata.
+mapping, response classification, direct Google Lens request construction,
+MrScraper HTML fetch wiring, local `.env` parsing, and dependency metadata.
 
-The live Google Lens Exact Match request has not been verified yet. This is not
-ready for challenge submission until `app/lens/direct.py` is proven against real
-Google Lens traffic and the classifier is hardened with real response samples.
+The live request shape has been verified through the Google Lens redirect to a
+Google Search `udm=26` page and the Exact Match `udm=48` tab URL. The current
+local environment is still not ready for challenge submission because direct
+Google traffic and the configured MrScraper token path return Google block/error
+HTML for the tested samples. Provide a working residential proxy or provider
+configuration, then re-run live verification before claiming submission-ready
+coverage.
 
 ## Endpoint
 
@@ -61,7 +66,8 @@ flowchart TD
     Limit --> Direct["DirectLensClient"]
     Direct --> Lens["lens.google.com/uploadbyurl"]
     Lens --> Search["Google Lens / Search udm=26 page"]
-    Search --> Classifier["HTML classifier"]
+    Search --> Exact["Google Search Exact Match udm=48 page"]
+    Exact --> Classifier["HTML classifier"]
     Classifier -->|Exact Match HTML| Success["200 text/html raw HTML"]
     Classifier -->|Malformed input| BadRequest["400"]
     Classifier -->|CAPTCHA or bot block| Blocked["429"]
@@ -119,10 +125,8 @@ With local environment variables:
 
 ```bash
 cp .env.example .env
-# Edit .env with local credentials, then:
-set -a
-source .env
-set +a
+# Edit .env with local credentials. The app loads .env automatically, and
+# process environment variables override matching .env values.
 uvicorn app.main:app --reload
 ```
 
@@ -138,9 +142,9 @@ Example API call:
 curl 'http://127.0.0.1:8000/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
 ```
 
-Until the direct Google Lens request is verified, `/google-lens` may return a
-non-2xx response for live URLs because the current upstream request builder is
-only a placeholder.
+If Google or the configured provider returns CAPTCHA, bot-check, or Google error
+HTML, `/google-lens` returns a non-2xx response rather than passing that page
+through as a successful Exact Match result.
 
 ## Test
 
@@ -166,8 +170,8 @@ The API reads these optional environment variables:
 - `MAX_CONCURRENCY`: intended upstream concurrency limit. Defaults to `4`.
 - `USER_AGENT`: user agent sent upstream.
 - `MRSCRAPER_API_KEY`: optional MrScraper Scraper API token. When present, the
-  app asks MrScraper to fetch the Google Lens URL with `html=true` and
-  `super=true`.
+  app asks MrScraper's HTML fetch endpoint to fetch the Google Lens URL with
+  `token`, `timeout`, `geoCode=US`, `url`, and `blockResources=false`.
 - `MRSCRAPER_API_URL`: optional MrScraper Scraper API endpoint. Defaults to
   `https://api.mrscraper.com`.
 - `PROXY_URL`: optional generic proxy URL for outbound Google requests. This
@@ -182,10 +186,10 @@ The API reads these optional environment variables:
 - `MRSCRAPER_PROXY_SESSION_MINUTES`: optional static session duration. Requires
   `MRSCRAPER_PROXY_SESSION_ID`.
 
-Use [.env.example](.env.example) as the local template. The application reads
-process environment variables and does not load `.env` files by itself; source
-`.env` before starting `uvicorn` or configure these variables in the deployment
-environment.
+Use [.env.example](.env.example) as the local template. The application loads a
+repo-root `.env` file when present, then overlays process environment variables.
+For deployment, prefer real process environment variables rather than copying
+local `.env` files.
 
 MrScraper Scraper API / Playground example:
 
@@ -217,9 +221,9 @@ export MRSCRAPER_PROXY_SESSION_ID='lens1'
 export MRSCRAPER_PROXY_SESSION_MINUTES='20'
 ```
 
-MrScraper has two relevant integration surfaces. The Playground/Scraper API uses
-an API token with `x-api-token` and URL parameters such as `html=true`,
-`super=true`, and `url=<target>`. The Residential Proxy product uses
+MrScraper has two relevant integration surfaces. The HTML fetch API uses an API
+token query parameter plus render options such as `timeout`, `geoCode`,
+`url=<target>`, and `blockResources`. The Residential Proxy product uses
 `proxy.mrscraper.com:10000` and username modifiers such as
 `-country-us`, `-mobile-country-us`, and `-sessid-lens1`. For an API token like
 `atk_...`, use `MRSCRAPER_API_KEY` rather than the residential

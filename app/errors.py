@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 
 
-@dataclass(frozen=True)
+@dataclass
 class LensApiError(Exception):
     """Base domain error for request handling failures.
 
@@ -17,32 +17,32 @@ class LensApiError(Exception):
     message: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class MalformedImageUrlError(LensApiError):
     """Raised when the `imageUrl` query parameter cannot be parsed."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class UpstreamRequestError(LensApiError):
     """Raised when the direct Google request fails before classification."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class UpstreamTimeoutError(LensApiError):
     """Raised when the direct Google request exceeds the configured timeout."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class BotBlockError(LensApiError):
     """Raised when Google returns CAPTCHA, bot-check, or block content."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class GoogleErrorPageError(LensApiError):
     """Raised when Google returns a non-result error page."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExactMatchNotFoundError(LensApiError):
     """Raised when upstream HTML is not recognized as Exact Match content."""
 

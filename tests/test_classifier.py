@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from app.lens.classifier import HtmlVerdict, classify_google_html
@@ -7,11 +8,32 @@ from app.lens.classifier import HtmlVerdict, classify_google_html
 
 class GoogleHtmlClassifierTests(unittest.TestCase):
     def test_detects_exact_match_html_markers(self) -> None:
-        html = "<html><title>Google Lens</title><body>Exact matches</body></html>"
+        html = "<html><title>Search Results</title><body>Exact matches</body></html>"
 
-        classification = classify_google_html(html, "https://www.google.com/search?q=x")
+        classification = classify_google_html(html, "https://www.google.com/search?udm=48")
 
         self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
+
+    def test_detects_selected_exact_match_tab(self) -> None:
+        html = (
+            '<div aria-current="page" selected="" class="mXwfNd">'
+            '<span class="R1QWuf">Exact matches</span></div>'
+        )
+
+        classification = classify_google_html(html)
+
+        self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
+
+    def test_fixture_all_tab_pages_are_not_exact_match_success(self) -> None:
+        fixture_dir = Path(__file__).parent / "fixtures" / "google_lens"
+        for fixture_path in fixture_dir.glob("google-search-*.html"):
+            with self.subTest(fixture=fixture_path.name):
+                classification = classify_google_html(
+                    fixture_path.read_text(encoding="utf-8", errors="replace"),
+                    "https://www.google.com/search?udm=26",
+                )
+
+                self.assertEqual(classification.verdict, HtmlVerdict.UNKNOWN)
 
     def test_detects_google_sorry_url_as_bot_block(self) -> None:
         classification = classify_google_html(

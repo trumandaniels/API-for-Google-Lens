@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -202,6 +203,46 @@ def parse_settings(environ: dict[str, str]) -> Settings:
     )
 
 
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a local dotenv-style file into environment values.
+
+    Args:
+        path: File path containing `KEY=value` lines.
+
+    Returns:
+        Parsed environment values. Missing files return an empty mapping.
+
+    Notes:
+        This parser intentionally supports only the simple dotenv subset used by
+        this project: comments, blank lines, optional `export`, whitespace
+        around `=`, and single- or double-quoted values.
+    """
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed_key = key.strip()
+        parsed_value = value.strip()
+        if (
+            len(parsed_value) >= 2
+            and parsed_value[0] == parsed_value[-1]
+            and parsed_value[0] in {"'", '"'}
+        ):
+            parsed_value = parsed_value[1:-1]
+        if parsed_key:
+            values[parsed_key] = parsed_value
+    return values
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return cached process settings.
@@ -213,6 +254,7 @@ def get_settings() -> Settings:
         ValidationError: If process environment values are invalid.
     """
     try:
-        return parse_settings(os.environ)
+        merged_environ = {**parse_env_file(Path(".env")), **os.environ}
+        return parse_settings(merged_environ)
     except ValidationError:
         raise

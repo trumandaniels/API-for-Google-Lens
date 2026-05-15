@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
-from app.config import build_mrscraper_proxy_url, parse_settings
+from app.config import build_mrscraper_proxy_url, parse_env_file, parse_settings
 
 
 class SettingsParsingTests(unittest.TestCase):
@@ -82,6 +84,27 @@ class SettingsParsingTests(unittest.TestCase):
     def test_rejects_proxy_url_without_http_scheme(self) -> None:
         with self.assertRaisesRegex(ValueError, "http:// or https://"):
             parse_settings({"PROXY_URL": "socks5://proxy.example:1080"})
+
+    def test_parses_local_env_file_subset(self) -> None:
+        with TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "# local settings",
+                        "export REQUEST_TIMEOUT_SECONDS = 45",
+                        "USER_AGENT=Mozilla/5.0 (X11; Linux x86_64)",
+                        "MRSCRAPER_API_KEY = 'atk_example'",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            values = parse_env_file(env_path)
+
+        self.assertEqual(values["REQUEST_TIMEOUT_SECONDS"], "45")
+        self.assertEqual(values["USER_AGENT"], "Mozilla/5.0 (X11; Linux x86_64)")
+        self.assertEqual(values["MRSCRAPER_API_KEY"], "atk_example")
 
 
 if __name__ == "__main__":

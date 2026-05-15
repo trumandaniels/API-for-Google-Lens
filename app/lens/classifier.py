@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import re
 
 
 class HtmlVerdict(StrEnum):
@@ -46,7 +47,13 @@ GOOGLE_ERROR_MARKERS = (
 EXACT_MATCH_MARKERS = (
     "Exact matches",
     "Visual matches",
-    "Google Lens",
+    "Search Results",
+)
+
+SELECTED_TAB_PATTERN = re.compile(
+    r'aria-current="page"[^>]*selected[^>]*class="mXwfNd"[^>]*>\s*'
+    r'<span[^>]*class="R1QWuf"[^>]*>(?P<label>[^<]+)</span>',
+    re.IGNORECASE,
 )
 
 
@@ -73,7 +80,15 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     if any(marker.lower() in html.lower() for marker in GOOGLE_ERROR_MARKERS):
         return HtmlClassification(HtmlVerdict.GOOGLE_ERROR, "Google error marker present")
 
-    if all(marker.lower() in html.lower() for marker in ("exact matches", "google lens")):
-        return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match markers present")
+    selected_tab = SELECTED_TAB_PATTERN.search(html)
+    if selected_tab is not None:
+        label = selected_tab.group("label").strip().lower()
+        if label == "exact matches":
+            return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match tab selected")
+        if label in {"all", "visual matches"}:
+            return HtmlClassification(HtmlVerdict.UNKNOWN, f"{label.title()} tab selected")
+
+    if "udm=48" in lower_url and "exact matches" in html.lower() and "search results" in html.lower():
+        return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match URL and markers present")
 
     return HtmlClassification(HtmlVerdict.UNKNOWN, "Exact Match markers absent")
