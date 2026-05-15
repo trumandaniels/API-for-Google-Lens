@@ -11,8 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-import httpx
-
 from app.errors import UpstreamRequestError, UpstreamTimeoutError
 from app.models import ImageUrl
 
@@ -84,6 +82,8 @@ class DirectLensClient:
             UpstreamTimeoutError: If the upstream request times out.
             UpstreamRequestError: If the upstream request fails.
         """
+        import httpx
+
         headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "en-US,en;q=0.9",
