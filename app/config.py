@@ -16,14 +16,14 @@ class Settings(BaseModel):
     """Runtime settings for the Google Lens API.
 
     Attributes:
-        google_base_url: Base Google Search URL used for direct requests.
+        google_base_url: Base Google Lens upload-by-URL endpoint used for direct requests.
         request_timeout_seconds: Upstream request timeout in seconds.
         max_concurrency: Maximum in-process concurrent upstream requests.
         user_agent: User agent sent to Google.
         proxy_url: Optional outbound proxy URL.
     """
 
-    google_base_url: str = Field(default="https://www.google.com/search")
+    google_base_url: str = Field(default="https://lens.google.com/uploadbyurl")
     request_timeout_seconds: float = Field(default=30.0, gt=0)
     max_concurrency: int = Field(default=4, gt=0)
     user_agent: str = Field(
@@ -92,4 +92,3 @@ def get_settings() -> Settings:
         return parse_settings(os.environ)
     except ValidationError:
         raise
-

@@ -1,4 +1,4 @@
-"""Direct Google Lens / Search request client.
+"""Direct Google Lens request client.
 
 This module intentionally contains no browser automation fallback. The hard
 challenge work is isolated here: build the correct direct Exact Match request,
@@ -37,7 +37,7 @@ class DirectLensClient:
     """HTTP client for the direct Google Lens Exact Match request path.
 
     Args:
-        google_base_url: Base Google Search URL.
+        google_base_url: Base Google Lens upload-by-URL endpoint.
         timeout_seconds: Per-request timeout.
         user_agent: User agent header.
         proxy_url: Optional outbound proxy URL.
@@ -55,7 +55,7 @@ class DirectLensClient:
             image_url: Parsed image URL from the API boundary.
 
         Returns:
-            Google Search URL carrying image-search parameters.
+            Google Lens upload-by-URL request.
 
         Notes:
             The parameter set is intentionally centralized here so live
@@ -64,9 +64,9 @@ class DirectLensClient:
         """
         query = urlencode(
             {
-                "tbm": "isch",
-                "source": "lnms",
-                "q": image_url.value,
+                "url": image_url.value,
+                "hl": "en",
+                "gl": "US",
             }
         )
         return f"{self.google_base_url}?{query}"
@@ -110,4 +110,3 @@ class DirectLensClient:
             final_url=str(response.url),
             status_code=response.status_code,
         )
-

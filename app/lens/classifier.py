@@ -37,7 +37,9 @@ BOT_BLOCK_MARKERS = (
 
 GOOGLE_ERROR_MARKERS = (
     "Error 400",
+    "Error 403",
     "Bad Request",
+    "Forbidden",
     "The requested URL was not found on this server",
 )
 
@@ -75,4 +77,3 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
         return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match markers present")
 
     return HtmlClassification(HtmlVerdict.UNKNOWN, "Exact Match markers absent")
-

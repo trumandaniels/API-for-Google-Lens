@@ -31,6 +31,11 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
 
         self.assertEqual(classification.verdict, HtmlVerdict.GOOGLE_ERROR)
 
+    def test_detects_google_forbidden_marker(self) -> None:
+        classification = classify_google_html("<title>Error 403 (Forbidden)!!1</title>")
+
+        self.assertEqual(classification.verdict, HtmlVerdict.GOOGLE_ERROR)
+
     def test_unknown_when_exact_match_markers_are_absent(self) -> None:
         classification = classify_google_html("<html><body>Search results</body></html>")
 
@@ -39,4 +44,3 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
