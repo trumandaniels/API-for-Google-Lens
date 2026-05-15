@@ -74,6 +74,7 @@ Expected failure responses include:
 ## Requirements
 
 - Python 3.12+
+- `uv` is recommended for dependency management
 - Network access for dependency installation
 - Network access for live Google Lens verification
 
@@ -81,10 +82,20 @@ Runtime dependencies are pinned in `pyproject.toml`.
 
 ## Setup
 
+Recommended with `uv`:
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+```
+
+Fallback with Python and `pip`:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+python3 -m pip install -e ".[dev]"
 ```
 
 ## Run
