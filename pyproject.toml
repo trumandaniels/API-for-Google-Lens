@@ -1,0 +1,22 @@
+[project]
+name = "api-for-google-lens"
+version = "0.1.0"
+description = "Direct-request FastAPI implementation for the Google Lens Exact Match scraping challenge."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.136.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.0",
+    "uvicorn[standard]==0.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
