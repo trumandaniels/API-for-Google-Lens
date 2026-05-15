@@ -216,3 +216,30 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local agentic harness and AI workspace files
+AGENTS.md
+PLAN.md
+docs/BOUNDARIES.md
+docs/INDEX.md
+docs/PLANS.md
+docs/RUNBOOK.md
+docs/challenge/*.pdf*
+docs/challenge/README.md
+docs/exec-plans/*.md
+docs/exec-plans/active/*.md
+docs/exec-plans/completed/*.md
+scripts/lint_exec_plans.py
+scripts/lint_index.py
+scripts/run_harness.py
+tests/test_lint_exec_plans.py
+tests/test_lint_index.py
+.agents/
+.codex
+.runtime/
+docs/README.md
+harness.json
+docs/challenge/SPEC.md
+scripts/lint_readmes.py
+tests/test_lint_readmes.py
+tests/test_run_harness.py
