@@ -41,6 +41,8 @@ class GoogleLensService:
         """
         client = DirectLensClient(
             google_base_url=settings.google_base_url,
+            mrscraper_api_key=settings.mrscraper_api_key,
+            mrscraper_api_url=settings.mrscraper_api_url,
             timeout_seconds=settings.request_timeout_seconds,
             user_agent=settings.user_agent,
             proxy_url=settings.proxy_url,
@@ -80,4 +82,3 @@ class GoogleLensService:
             raise GoogleErrorPageError("Google returned an error page")
 
         raise ExactMatchNotFoundError("Google response was not Exact Match HTML")
-

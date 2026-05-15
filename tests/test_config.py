@@ -11,6 +11,16 @@ class SettingsParsingTests(unittest.TestCase):
 
         self.assertEqual(settings.proxy_url, "http://proxy.example:8080")
 
+    def test_parses_mrscraper_api_key(self) -> None:
+        settings = parse_settings({"MRSCRAPER_API_KEY": "atk_example"})
+
+        self.assertEqual(settings.mrscraper_api_key, "atk_example")
+        self.assertEqual(settings.mrscraper_api_url, "https://api.mrscraper.com")
+
+    def test_rejects_non_https_mrscraper_api_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HTTPS URL"):
+            parse_settings({"MRSCRAPER_API_URL": "http://api.mrscraper.com"})
+
     def test_explicit_proxy_url_takes_precedence_over_mrscraper_credentials(self) -> None:
         settings = parse_settings(
             {

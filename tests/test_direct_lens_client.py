@@ -27,7 +27,30 @@ class DirectLensClientTests(unittest.TestCase):
         self.assertEqual(query["hl"], ["en"])
         self.assertEqual(query["gl"], ["US"])
 
+    def test_builds_mrscraper_api_request_for_lens_url(self) -> None:
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_example",
+            mrscraper_api_url="https://api.mrscraper.com",
+        )
+        target_url = (
+            "https://lens.google.com/uploadbyurl?"
+            "url=https%3A%2F%2Fexample.com%2Fimage.jpg&hl=en&gl=US"
+        )
+
+        request_url = client.build_mrscraper_api_url(target_url)
+        parsed = urlparse(request_url)
+        query = parse_qs(parsed.query)
+
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.netloc, "api.mrscraper.com")
+        self.assertEqual(query["token"], ["atk_example"])
+        self.assertEqual(query["html"], ["true"])
+        self.assertEqual(query["super"], ["true"])
+        self.assertEqual(query["url"], [target_url])
+
 
 if __name__ == "__main__":
     unittest.main()
-

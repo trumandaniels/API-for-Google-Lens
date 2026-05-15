@@ -15,24 +15,6 @@ The live Google Lens Exact Match request has not been verified yet. This is not
 ready for challenge submission until `app/lens/direct.py` is proven against real
 Google Lens traffic and the classifier is hardened with real response samples.
 
-## Next Step
-
-Implement and verify the direct Exact Match request in `app/lens/direct.py`.
-
-Recommended sequence:
-
-1. Install the project dependencies.
-2. Run the local tests to confirm the scaffold is healthy.
-3. Start the FastAPI server and verify `/healthz`.
-4. Use a browser or devtools capture to inspect the Google Lens image-URL flow.
-5. Replace the placeholder request builder in `app/lens/direct.py` with the
-   verified direct Exact Match request.
-6. Save sanitized live response samples under `.runtime/`.
-7. Add fixture tests for valid Exact Match HTML, CAPTCHA/bot-block pages, Google
-   error pages, and unknown responses.
-8. Re-run tests and verify `GET /google-lens?imageUrl=...` returns raw Exact
-   Match HTML for live sample URLs.
-
 ## Endpoint
 
 ```text
@@ -170,6 +152,11 @@ The API reads these optional environment variables:
 - `REQUEST_TIMEOUT_SECONDS`: upstream timeout. Defaults to `30.0`.
 - `MAX_CONCURRENCY`: intended upstream concurrency limit. Defaults to `4`.
 - `USER_AGENT`: user agent sent upstream.
+- `MRSCRAPER_API_KEY`: optional MrScraper Scraper API token. When present, the
+  app asks MrScraper to fetch the Google Lens URL with `html=true` and
+  `super=true`.
+- `MRSCRAPER_API_URL`: optional MrScraper Scraper API endpoint. Defaults to
+  `https://api.mrscraper.com`.
 - `PROXY_URL`: optional generic proxy URL for outbound Google requests. This
   takes precedence over provider-specific proxy settings.
 - `MRSCRAPER_PROXY_USERNAME`: MrScraper Residential Proxy username.
@@ -186,6 +173,12 @@ Use [.env.example](.env.example) as the local template. The application reads
 process environment variables and does not load `.env` files by itself; source
 `.env` before starting `uvicorn` or configure these variables in the deployment
 environment.
+
+MrScraper Scraper API / Playground example:
+
+```bash
+export MRSCRAPER_API_KEY='atk_example'
+```
 
 Generic proxy example:
 
@@ -211,14 +204,15 @@ export MRSCRAPER_PROXY_SESSION_ID='lens1'
 export MRSCRAPER_PROXY_SESSION_MINUTES='20'
 ```
 
-MrScraper's public Residential Proxy documentation uses
+MrScraper has two relevant integration surfaces. The Playground/Scraper API uses
+an API token with `x-api-token` and URL parameters such as `html=true`,
+`super=true`, and `url=<target>`. The Residential Proxy product uses
 `proxy.mrscraper.com:10000` and username modifiers such as
-`-country-us`, `-mobile-country-us`, and `-sessid-lens1`. Do not commit proxy
-credentials or saved live HTML that includes account-specific request metadata.
-At the time this README was updated, MrScraper's public billing page listed
-Residential Proxies on Standard plans and above, not on the Free plan; if a
-reviewer provides different challenge-specific free credentials, these
-environment variables are the intended integration point.
+`-country-us`, `-mobile-country-us`, and `-sessid-lens1`. For an API token like
+`atk_...`, use `MRSCRAPER_API_KEY` rather than the residential
+`MRSCRAPER_PROXY_USERNAME` / `MRSCRAPER_PROXY_PASSWORD` variables. Do not commit
+API keys, proxy credentials, or saved live HTML that includes account-specific
+request metadata.
 
 Note: process-wide concurrency enforcement still needs to be completed. The
 current scaffold includes the limiter type, but request lifetime management must

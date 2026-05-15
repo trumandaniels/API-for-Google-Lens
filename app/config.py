@@ -21,6 +21,8 @@ class Settings(BaseModel):
         request_timeout_seconds: Upstream request timeout in seconds.
         max_concurrency: Maximum in-process concurrent upstream requests.
         user_agent: User agent sent to Google.
+        mrscraper_api_key: Optional MrScraper Scraper API token.
+        mrscraper_api_url: MrScraper Scraper API endpoint.
         proxy_url: Optional outbound proxy URL. May be a generic proxy URL or
             a MrScraper proxy URL constructed from environment credentials.
     """
@@ -35,6 +37,8 @@ class Settings(BaseModel):
         ),
         min_length=1,
     )
+    mrscraper_api_key: str | None = None
+    mrscraper_api_url: str = Field(default="https://api.mrscraper.com")
     proxy_url: str | None = None
 
     @field_validator("google_base_url")
@@ -77,6 +81,25 @@ class Settings(BaseModel):
         if not stripped.startswith(("http://", "https://")):
             raise ValueError("proxy_url must start with http:// or https://")
         return stripped.rstrip("/")
+
+    @field_validator("mrscraper_api_url")
+    @classmethod
+    def require_https_mrscraper_api_url(cls, value: str) -> str:
+        """Parse and constrain the configured MrScraper API URL.
+
+        Args:
+            value: Candidate MrScraper Scraper API URL.
+
+        Returns:
+            Normalized URL string.
+
+        Raises:
+            ValueError: If the URL is not an HTTPS URL.
+        """
+        stripped = value.strip()
+        if not stripped.startswith("https://"):
+            raise ValueError("mrscraper_api_url must be an HTTPS URL")
+        return stripped.rstrip("?")
 
 
 def build_mrscraper_proxy_url(environ: dict[str, str]) -> str | None:
@@ -164,6 +187,11 @@ def parse_settings(environ: dict[str, str]) -> Settings:
     proxy_url = environ.get("PROXY_URL") or build_mrscraper_proxy_url(environ)
     return Settings(
         google_base_url=environ.get("GOOGLE_BASE_URL", Settings().google_base_url),
+        mrscraper_api_key=environ.get("MRSCRAPER_API_KEY") or None,
+        mrscraper_api_url=environ.get(
+            "MRSCRAPER_API_URL",
+            Settings().mrscraper_api_url,
+        ),
         request_timeout_seconds=environ.get(
             "REQUEST_TIMEOUT_SECONDS",
             str(Settings().request_timeout_seconds),
