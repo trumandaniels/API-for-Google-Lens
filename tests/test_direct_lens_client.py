@@ -14,6 +14,7 @@ class DirectLensClientTests(unittest.TestCase):
             google_base_url="https://lens.google.com/uploadbyurl",
             timeout_seconds=30,
             user_agent="test-agent",
+            mrscraper_api_key="atk_example",
         )
         image_url = ImageUrl.parse("https://example.com/images/a b.jpg?size=large")
 
@@ -34,6 +35,7 @@ class DirectLensClientTests(unittest.TestCase):
             google_base_url="https://lens.google.com/uploadbyurl",
             timeout_seconds=30,
             user_agent="test-agent",
+            mrscraper_api_key="atk_example",
         )
 
         request_url = client.build_exact_match_tab_url(
@@ -77,6 +79,7 @@ class DirectLensClientTests(unittest.TestCase):
             google_base_url="https://lens.google.com/uploadbyurl",
             timeout_seconds=30,
             user_agent="test-agent",
+            mrscraper_api_key="atk_example",
         )
         html = (
             Path(__file__).parent
@@ -94,16 +97,16 @@ class DirectLensClientTests(unittest.TestCase):
         self.assertEqual(parsed.netloc, "www.google.com")
         self.assertEqual(query["udm"], ["48"])
 
-    def test_mrscraper_api_token_takes_precedence_over_direct_proxy(self) -> None:
+    def test_mrscraper_api_key_is_required_for_api_url_builder(self) -> None:
         client = DirectLensClient(
             google_base_url="https://lens.google.com/uploadbyurl",
             timeout_seconds=30,
             user_agent="test-agent",
-            mrscraper_api_key="atk_example",
-            proxy_url="http://proxy.example:8080",
+            mrscraper_api_key="",
         )
 
-        self.assertTrue(client.uses_mrscraper_api)
+        with self.assertRaisesRegex(ValueError, "mrscraper_api_key is required"):
+            client.build_mrscraper_api_url("https://lens.google.com/uploadbyurl?url=x")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,8 @@
-"""Direct Google Lens request client.
+"""MrScraper-backed Google Lens request client.
 
-This module intentionally contains no browser automation fallback. The hard
-challenge work is isolated here: build the correct direct Exact Match request,
-send it with realistic headers and proxy configuration, and return the raw HTML
-for classification.
+This module intentionally contains no browser automation fallback. It builds
+the Google Lens URL flow and always asks MrScraper's API-token HTML fetcher to
+retrieve the upstream Google pages for classification.
 """
 
 from __future__ import annotations
@@ -38,33 +37,17 @@ class DirectLensClient:
 
     Args:
         google_base_url: Base Google Lens upload-by-URL endpoint.
-        mrscraper_api_key: Optional MrScraper Scraper API token. When present,
-            upstream Google Lens requests are fetched through the MrScraper API
-            with `html=true` and `super=true`.
+        mrscraper_api_key: Required MrScraper Scraper API token.
         mrscraper_api_url: MrScraper Scraper API endpoint.
         timeout_seconds: Per-request timeout.
         user_agent: User agent header.
-        proxy_url: Optional outbound proxy URL.
     """
 
     google_base_url: str
     timeout_seconds: float
     user_agent: str
-    mrscraper_api_key: str | None = None
+    mrscraper_api_key: str
     mrscraper_api_url: str = "https://api.mrscraper.com"
-    proxy_url: str | None = None
-
-    @property
-    def uses_mrscraper_api(self) -> bool:
-        """Return whether requests should use MrScraper's HTML fetch API.
-
-        Returns:
-            `True` when an API token is configured. The API-token fetcher is a
-            distinct provider path from the residential proxy product and takes
-            precedence because residential proxy credentials may be present but
-            unavailable or unentitled for the account.
-        """
-        return self.mrscraper_api_key is not None
 
     def build_lens_entry_url(self, image_url: ImageUrl) -> str:
         """Build the direct Google Lens entry URL for an image.
@@ -77,11 +60,10 @@ class DirectLensClient:
             result page.
 
         Notes:
-            Google currently redirects this minimal request to a
+            MrScraper fetches this Google URL, which redirects to a
             `google.com/search` page with `udm=26`. Adding `hl`, `gl`, or `udm`
-            to the Lens entry URL caused Google 403 responses during live
-            provider verification, so those values are left for the redirected
-            Search URL instead.
+            to the Lens entry URL caused Google 403 responses during prior live
+            verification, so the entry URL stays minimal.
         """
         query = urlencode(
             {
@@ -156,7 +138,7 @@ class DirectLensClient:
             ValueError: If this client was not configured with a MrScraper API
                 key.
         """
-        if self.mrscraper_api_key is None:
+        if not self.mrscraper_api_key:
             raise ValueError("mrscraper_api_key is required")
         query = urlencode(
             {
@@ -197,20 +179,16 @@ class DirectLensClient:
         }
         upstream_url = self.build_exact_match_url(image_url)
         final_url = upstream_url
-        request_url = upstream_url
-        if self.uses_mrscraper_api:
-            request_url = self.build_mrscraper_api_url(upstream_url)
-            headers["x-api-token"] = self.mrscraper_api_key or ""
+        request_url = self.build_mrscraper_api_url(upstream_url)
+        headers["x-api-token"] = self.mrscraper_api_key
 
         timeout = httpx.Timeout(self.timeout_seconds)
-        proxy = self.proxy_url if self.proxy_url and not self.uses_mrscraper_api else None
 
         async def get(url: str, request_headers: dict[str, str]) -> httpx.Response:
             try:
                 async with httpx.AsyncClient(
                     follow_redirects=True,
                     headers=request_headers,
-                    proxy=proxy,
                     timeout=timeout,
                     trust_env=False,
                 ) as client:
@@ -221,18 +199,10 @@ class DirectLensClient:
                 raise UpstreamRequestError("Google Lens request failed") from error
 
         response = await get(request_url, headers)
-        if self.uses_mrscraper_api:
-            exact_url = self.find_exact_match_tab_url(response.text)
-            if exact_url is not None:
-                final_url = exact_url
-                response = await get(self.build_mrscraper_api_url(exact_url), headers)
-        elif "udm=26" in str(response.url):
-            exact_url = self.build_exact_match_tab_url(str(response.url))
-            exact_headers = {**headers, "referer": str(response.url)}
+        exact_url = self.find_exact_match_tab_url(response.text)
+        if exact_url is not None:
             final_url = exact_url
-            response = await get(exact_url, exact_headers)
-        else:
-            final_url = str(response.url)
+            response = await get(self.build_mrscraper_api_url(exact_url), headers)
 
         return DirectLensResponse(
             html=response.text,

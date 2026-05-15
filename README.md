@@ -16,7 +16,7 @@ page.
 - [Setup](#setup)
 - [Run](#run)
 - [Test](#test)
-- [Proxy Configuration](#proxy-configuration)
+- [Provider Configuration](#provider-configuration)
 - [Approach](#approach)
 
 ## Status
@@ -26,13 +26,13 @@ mapping, response classification, direct Google Lens request construction,
 MrScraper HTML fetch wiring, local `.env` parsing, fixture coverage, and
 dependency metadata.
 
-The live MrScraper API-token path has been verified for Google Lens Exact Match:
-the service submits a minimal Lens `uploadbyurl` request, receives the Google
-Search Lens page, follows the Exact Match `udm=48` tab link, and returns the raw
-Exact Match HTML. Direct non-provider Google traffic may still return Google
-block pages from local or datacenter networks. The residential proxy path is
-implemented but should be separately verified with working proxy credentials
-before claiming it as a supported deployment mode.
+The service intentionally uses MrScraper API-token HTML fetch mode for all live
+Google Lens requests. The verified flow submits a minimal Lens `uploadbyurl`
+request through MrScraper, receives the Google Search Lens page, follows the
+Exact Match `udm=48` tab link through MrScraper, and returns the raw Exact Match
+HTML. Plain local or datacenter HTTP clients have returned Google `403` pages
+during live probes, so direct non-provider Google traffic is not a supported
+runtime path.
 
 ## Endpoint
 
@@ -65,7 +65,8 @@ flowchart TD
     Parse --> Service["GoogleLensService"]
     Service --> Limit["Concurrency limiter"]
     Limit --> Direct["DirectLensClient"]
-    Direct --> Lens["lens.google.com/uploadbyurl"]
+    Direct --> Provider["MrScraper HTML fetch API"]
+    Provider --> Lens["lens.google.com/uploadbyurl"]
     Lens --> Search["Google Lens / Search udm=26 page"]
     Search --> Exact["Google Search Exact Match udm=48 page"]
     Exact --> Classifier["HTML classifier"]
@@ -161,32 +162,20 @@ Syntax-check the app and tests:
 python3 -m compileall -q app tests
 ```
 
-## Proxy Configuration
+## Provider Configuration
 
-The API reads these optional environment variables:
+The API reads these environment variables:
 
 - `GOOGLE_BASE_URL`: upstream Google Lens base URL. Defaults to
   `https://lens.google.com/uploadbyurl`.
 - `REQUEST_TIMEOUT_SECONDS`: upstream timeout. Defaults to `30.0`.
 - `MAX_CONCURRENCY`: intended upstream concurrency limit. Defaults to `4`.
 - `USER_AGENT`: user agent sent upstream.
-- `MRSCRAPER_API_KEY`: optional MrScraper Scraper API token. When present, the
-  app asks MrScraper's HTML fetch endpoint to fetch the Google Lens URL with
-  `token`, `html=true`, `super=true`, and `url`. This API-token mode takes
-  precedence over residential proxy settings when both are configured.
+- `MRSCRAPER_API_KEY`: required MrScraper Scraper API token. The app asks
+  MrScraper's HTML fetch endpoint to fetch each Google Lens / Search URL with
+  `token`, `html=true`, `super=true`, and `url`.
 - `MRSCRAPER_API_URL`: optional MrScraper Scraper API endpoint. Defaults to
   `https://api.mrscraper.com`.
-- `PROXY_URL`: optional generic proxy URL for outbound Google requests. This
-  takes precedence over provider-specific proxy settings.
-- `MRSCRAPER_PROXY_USERNAME`: MrScraper Residential Proxy username.
-- `MRSCRAPER_PROXY_PASSWORD`: MrScraper Residential Proxy password.
-- `MRSCRAPER_PROXY_COUNTRY`: optional two-letter ISO country code such as `us`.
-- `MRSCRAPER_PROXY_MOBILE`: optional true-like value (`true`, `yes`, `on`, or
-  `1`) for a mobile proxy. Requires `MRSCRAPER_PROXY_COUNTRY`.
-- `MRSCRAPER_PROXY_SESSION_ID`: optional static session identifier. Requires
-  `MRSCRAPER_PROXY_COUNTRY`.
-- `MRSCRAPER_PROXY_SESSION_MINUTES`: optional static session duration. Requires
-  `MRSCRAPER_PROXY_SESSION_ID`.
 
 Use [.env.example](.env.example) as the local template. The application loads a
 repo-root `.env` file when present, then overlays process environment variables.
@@ -199,39 +188,10 @@ MrScraper Scraper API / Playground example:
 export MRSCRAPER_API_KEY='atk_example'
 ```
 
-Generic proxy example:
-
-```bash
-export PROXY_URL='http://username:password@proxy.example.com:8080'
-```
-
-MrScraper rotating US residential proxy example:
-
-```bash
-export MRSCRAPER_PROXY_USERNAME='user123'
-export MRSCRAPER_PROXY_PASSWORD='pass456'
-export MRSCRAPER_PROXY_COUNTRY='us'
-```
-
-MrScraper static-session example:
-
-```bash
-export MRSCRAPER_PROXY_USERNAME='user123'
-export MRSCRAPER_PROXY_PASSWORD='pass456'
-export MRSCRAPER_PROXY_COUNTRY='us'
-export MRSCRAPER_PROXY_SESSION_ID='lens1'
-export MRSCRAPER_PROXY_SESSION_MINUTES='20'
-```
-
-MrScraper has two relevant integration surfaces. The HTML fetch API uses an API
-token query parameter plus render options such as `html=true`, `super=true`,
-and `url=<target>`. The Residential Proxy product uses
-`proxy.mrscraper.com:10000` and username modifiers such as
-`-country-us`, `-mobile-country-us`, and `-sessid-lens1`. For an API token like
-`atk_...`, use `MRSCRAPER_API_KEY` rather than the residential
-`MRSCRAPER_PROXY_USERNAME` / `MRSCRAPER_PROXY_PASSWORD` variables. Do not commit
-API keys, proxy credentials, or saved live HTML that includes account-specific
-request metadata.
+MrScraper's HTML fetch API uses an API token query parameter plus render options
+such as `html=true`, `super=true`, and `url=<target>`. That API-token flow is
+the supported scraping provider for this project. Do not commit API keys or
+saved live HTML that includes account-specific request metadata.
 
 Note: process-wide concurrency enforcement still needs to be completed. The
 current scaffold includes the limiter type, but request lifetime management must
@@ -239,7 +199,7 @@ be tightened before claiming a hosted max concurrency.
 
 ## Approach
 
-The current implementation is structured around a direct Google Lens request.
-It submits the image URL to Google Lens, follows the resulting Google Search /
-Lens page, classifies the returned HTML, and only returns successful Exact Match
-pages to the caller.
+The current implementation is structured around a direct Google Lens URL flow
+fetched through MrScraper's API-token HTML endpoint. It submits the image URL to
+Google Lens, follows the resulting Google Search / Lens page, classifies the
+returned HTML, and only returns successful Exact Match pages to the caller.

@@ -45,7 +45,6 @@ class GoogleLensService:
             mrscraper_api_url=settings.mrscraper_api_url,
             timeout_seconds=settings.request_timeout_seconds,
             user_agent=settings.user_agent,
-            proxy_url=settings.proxy_url,
         )
         return cls(client=client, limiter=limiter)
 
