@@ -6,6 +6,19 @@ The target API accepts an image URL, performs a direct Google Lens / Google
 Search Exact Match request, and returns the raw HTML for the Exact Match results
 page.
 
+## Table of Contents
+
+- [Status](#status)
+- [Endpoint](#endpoint)
+- [Data Flow](#data-flow)
+- [Project Structure](#project-structure)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Run](#run)
+- [Test](#test)
+- [Proxy Configuration](#proxy-configuration)
+- [Approach](#approach)
+
 ## Status
 
 The project currently has the FastAPI scaffold, typed request parsing, error
