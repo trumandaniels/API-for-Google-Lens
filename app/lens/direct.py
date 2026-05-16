@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import unescape
 import re
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from app.errors import UpstreamRequestError, UpstreamTimeoutError
@@ -48,6 +49,34 @@ class DirectLensClient:
     user_agent: str
     mrscraper_api_key: str
     mrscraper_api_url: str = "https://api.mrscraper.com"
+    http_client: Any | None = None
+
+    def build_request_headers(self) -> dict[str, str]:
+        """Build stable headers for MrScraper-backed Google page fetches.
+
+        Returns:
+            Browser-like request headers. The API token is included both in the
+            MrScraper query string and the provider token header accepted by
+            the service.
+        """
+        return {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-language": "en-US,en;q=0.9",
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": self.user_agent,
+            "x-api-token": self.mrscraper_api_key,
+        }
+
+    async def aclose(self) -> None:
+        """Close the owned process-scoped HTTP client, if one was provided."""
+        if self.http_client is not None:
+            await self.http_client.aclose()
 
     def build_lens_entry_url(self, image_url: ImageUrl) -> str:
         """Build the direct Google Lens entry URL for an image.
@@ -165,34 +194,23 @@ class DirectLensClient:
         """
         import httpx
 
-        headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "accept-language": "en-US,en;q=0.9",
-            "cache-control": "no-cache",
-            "pragma": "no-cache",
-            "sec-fetch-dest": "document",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-site": "none",
-            "sec-fetch-user": "?1",
-            "upgrade-insecure-requests": "1",
-            "user-agent": self.user_agent,
-        }
+        headers = self.build_request_headers()
         upstream_url = self.build_exact_match_url(image_url)
         final_url = upstream_url
         request_url = self.build_mrscraper_api_url(upstream_url)
-        headers["x-api-token"] = self.mrscraper_api_key
 
         timeout = httpx.Timeout(self.timeout_seconds)
 
         async def get(url: str, request_headers: dict[str, str]) -> httpx.Response:
             try:
+                if self.http_client is not None:
+                    return await self.http_client.get(url, headers=request_headers)
                 async with httpx.AsyncClient(
                     follow_redirects=True,
-                    headers=request_headers,
                     timeout=timeout,
                     trust_env=False,
                 ) as client:
-                    return await client.get(url)
+                    return await client.get(url, headers=request_headers)
             except httpx.TimeoutException as error:
                 raise UpstreamTimeoutError("Google Lens request timed out") from error
             except httpx.HTTPError as error:

@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 
 from app.api import router
@@ -29,7 +30,34 @@ def build_lens_service(settings: Settings) -> GoogleLensService:
         Service with shared client configuration and concurrency limiter.
     """
     limiter = AsyncConcurrencyLimiter(settings.max_concurrency)
-    return GoogleLensService.from_settings(settings=settings, limiter=limiter)
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+        "user-agent": settings.user_agent,
+        "x-api-token": settings.mrscraper_api_key,
+    }
+    http_client = httpx.AsyncClient(
+        follow_redirects=True,
+        headers=headers,
+        limits=httpx.Limits(
+            max_connections=max(settings.max_concurrency * 2, 20),
+            max_keepalive_connections=max(settings.max_concurrency, 10),
+        ),
+        timeout=httpx.Timeout(settings.request_timeout_seconds),
+        trust_env=False,
+    )
+    return GoogleLensService.from_settings(
+        settings=settings,
+        limiter=limiter,
+        http_client=http_client,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -45,9 +73,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         """Initialize shared application state for the process lifetime."""
         resolved_settings = settings if settings is not None else get_settings()
+        lens_service = build_lens_service(resolved_settings)
         application.state.settings = resolved_settings
-        application.state.lens_service = build_lens_service(resolved_settings)
-        yield
+        application.state.lens_service = lens_service
+        try:
+            yield
+        finally:
+            await lens_service.aclose()
 
     application = FastAPI(
         title="Google Lens Exact Match API",

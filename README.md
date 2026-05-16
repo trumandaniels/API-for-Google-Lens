@@ -17,6 +17,7 @@ page.
 - [Run](#run)
 - [Test](#test)
 - [Measure](#measure)
+- [Optimization Evidence](#optimization-evidence)
 - [Provider Configuration](#provider-configuration)
 - [Approach](#approach)
 
@@ -190,7 +191,7 @@ python3 scripts/measure_lens_api.py \
   --base-url https://your-host.example \
   --image-url-file .runtime/live-image-urls.txt \
   --requests 84 \
-  --concurrency 4 \
+  --concurrency 16 \
   --rate-per-minute 16.7 \
   --target five-minute-estimate
 ```
@@ -210,7 +211,7 @@ python3 scripts/measure_lens_api.py \
   --base-url https://your-host.example \
   --image-url-file .runtime/live-image-urls.txt \
   --requests 1000 \
-  --concurrency 4 \
+  --concurrency 16 \
   --rate-per-minute 16.7 \
   --target challenge
 ```
@@ -222,6 +223,39 @@ short hashes in measurement artifacts. Use this full run as final evidence
 before submission or when claiming a hosted max concurrency, not as the default
 iteration loop.
 
+## Optimization Evidence
+
+The runtime keeps the direct reverse-engineered approach required by the
+challenge: each request still goes through MrScraper API-token mode, reaches the
+Google Lens Search page, follows the Exact Match `udm=48` tab, classifies the
+HTML, and returns only actual Exact Match content.
+
+Two measured optimizations are currently kept:
+
+- `MAX_CONCURRENCY` defaults to `16` process-wide upstream slots. This is high
+  enough to keep the API responsive at the evaluator's 16.7 requests/minute
+  arrival pace without changing the scraping approach.
+- The app creates one process-scoped `httpx.AsyncClient` for MrScraper traffic
+  and closes it during FastAPI shutdown. This avoids rebuilding the provider
+  HTTP client for every upstream hop, keeps connection pooling available, and
+  reduces per-request resource churn during soak tests.
+
+Recent local live measurements with the same `.runtime/live-image-urls.txt`
+input set:
+
+| Run | Server setting | Requests | Valid Exact Match | Error rate | Avg latency | Max latency | Observed-throughput hour estimate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline | `MAX_CONCURRENCY=4` | 84 | 84 | 0% | 26.19s | 34.25s | about 531 valid/hour |
+| Rejected pressure setting | `MAX_CONCURRENCY=8` | 84 | 84 | 0% | 49.02s | 59.36s | 553 valid/hour |
+| Kept optimized setting | `MAX_CONCURRENCY=16` | 48 | 48 | 0% | 28.62s | 40.49s | 834 valid/hour |
+
+The `MAX_CONCURRENCY=8` pressure run stayed under the 60-second latency target,
+but it did not materially improve observed throughput and pushed p95 latency
+close to the limit. The `MAX_CONCURRENCY=16` run preserved a 0% measured error
+rate, kept max latency around 40 seconds, and improved the observed-throughput
+hour estimate by roughly 57% compared with the earlier 4-slot baseline. These
+are local live measurements, not a substitute for the final hosted 1-hour run.
+
 ## Provider Configuration
 
 The API reads these environment variables:
@@ -230,7 +264,7 @@ The API reads these environment variables:
   `https://lens.google.com/uploadbyurl`.
 - `REQUEST_TIMEOUT_SECONDS`: upstream timeout. Defaults to `30.0`.
 - `MAX_CONCURRENCY`: process-wide upstream concurrency limit for this API
-  process. Defaults to `4`.
+  process. Defaults to `16`, based on the live optimization run above.
 - `REQUEST_DELAY_MIN_SECONDS`: minimum randomized local delay before each
   provider request. Defaults to `0.25`.
 - `REQUEST_DELAY_MAX_SECONDS`: maximum randomized local delay before each

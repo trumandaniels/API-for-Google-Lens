@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import parse_settings
 from app.lens.direct import DirectLensResponse
 from app.lens.service import GoogleLensService
-from app.main import create_app
+from app.main import build_lens_service, create_app
 from app.models import ImageUrl
 from app.throttling import AsyncConcurrencyLimiter
 
@@ -62,6 +62,17 @@ class ApiLifecycleTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIs(first_service, second_service)
+        self.assertTrue(first_service.client.http_client.is_closed)
+
+    def test_lens_service_uses_process_scoped_http_client(self) -> None:
+        settings = parse_settings({"MRSCRAPER_API_KEY": "atk_example"})
+        service = build_lens_service(settings)
+
+        try:
+            self.assertIsNotNone(service.client.http_client)
+            self.assertEqual(settings.max_concurrency, 16)
+        finally:
+            asyncio.run(service.aclose())
 
     def test_route_uses_shared_concurrency_limiter(self) -> None:
         settings = parse_settings(

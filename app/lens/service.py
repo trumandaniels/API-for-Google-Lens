@@ -35,12 +35,15 @@ class GoogleLensService:
         cls,
         settings: Settings,
         limiter: AsyncConcurrencyLimiter,
+        http_client: object | None = None,
     ) -> "GoogleLensService":
         """Create a service from parsed application settings.
 
         Args:
             settings: Parsed runtime settings.
             limiter: Concurrency limiter for upstream requests.
+            http_client: Optional process-scoped HTTP client for provider
+                requests.
 
         Returns:
             Configured GoogleLensService.
@@ -51,6 +54,7 @@ class GoogleLensService:
             mrscraper_api_url=settings.mrscraper_api_url,
             timeout_seconds=settings.request_timeout_seconds,
             user_agent=settings.user_agent,
+            http_client=http_client,
         )
         return cls(
             client=client,
@@ -74,6 +78,12 @@ class GoogleLensService:
         )
         if delay > 0:
             await asyncio.sleep(delay)
+
+    async def aclose(self) -> None:
+        """Close owned network resources for application shutdown."""
+        close = getattr(self.client, "aclose", None)
+        if close is not None:
+            await close()
 
     async def fetch_exact_match_html(self, image_url: ImageUrl) -> ExactMatchHtml:
         """Fetch and classify Exact Match HTML for an image URL.
