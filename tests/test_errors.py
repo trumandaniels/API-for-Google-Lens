@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from app.errors import BotBlockError, MalformedImageUrlError, UpstreamTimeoutError, to_http_error
+from app.errors import (
+    BotBlockError,
+    MalformedImageUrlError,
+    ProviderCreditsExhaustedError,
+    UpstreamTimeoutError,
+    to_http_error,
+)
 
 
 class ErrorMappingTests(unittest.TestCase):
@@ -21,6 +27,12 @@ class ErrorMappingTests(unittest.TestCase):
         exception = to_http_error(BotBlockError("blocked"))
 
         self.assertEqual(exception.status_code, 429)
+
+    def test_provider_credits_exhausted_maps_to_payment_required(self) -> None:
+        exception = to_http_error(ProviderCreditsExhaustedError("credits exhausted"))
+
+        self.assertEqual(exception.status_code, 402)
+        self.assertEqual(exception.detail, "credits exhausted")
 
 
 if __name__ == "__main__":

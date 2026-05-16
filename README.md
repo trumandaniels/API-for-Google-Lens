@@ -24,9 +24,10 @@ page.
 
 ## Status
 
-The repository is ready for code review and local evaluation. Final challenge
-submission still needs a hosted API URL and a hosted one-hour or agreed remote
-test run before claiming production scoring results.
+The repository is ready for code review and local evaluation. The Railway API
+is deployed at `https://api-for-google-lens-production.up.railway.app`. Final
+challenge scoring still needs a hosted one-hour or agreed remote test run
+before claiming production scoring results.
 
 At a glance:
 
@@ -38,6 +39,7 @@ At a glance:
 | Anti-bot strategy | MrScraper provider-side Google-facing rotation plus local browser headers, jitter, and concurrency limiting. |
 | Meaningful errors | `400`, `429`, `502`, and `504` are mapped explicitly. |
 | Local setup, run, and tests | Documented below; harness and unit suite pass locally. |
+| Hosted API URL | Deployed on Railway at `https://api-for-google-lens-production.up.railway.app`. |
 | 1-hour scoring proof | Not final yet; current evidence is local live measurement, not hosted final proof. |
 
 The implementation has the FastAPI scaffold, typed request parsing, error
@@ -82,11 +84,24 @@ Content-Type: text/html
 Expected failure responses include:
 
 - `400` for malformed `imageUrl` input.
+- `402` when the configured scraping provider token is out of proxy credits.
+  Provide your own MrScraper API key with `X-MrScraper-Api-Key` or add credits
+  to `trumanadaniels at gmail dot com`.
 - `429` for CAPTCHA, bot-check, or Google block pages.
 - `502` for upstream request failures or unrecognized Google result pages.
 - `504` for upstream timeouts.
 
 ## Data Flow
+
+The API performs two MrScraper-backed Google fetches for a successful request.
+The first fetch submits the image URL to Google Lens and lets Google create the
+session-specific Search/Lens result page. That page is usually the All results
+view, not the Exact Match view, but it contains the session-bound Exact Match
+tab URL with `udm=48`. The second fetch requests that extracted `udm=48` URL
+through MrScraper and returns the resulting Exact Match HTML after
+classification. This two-step flow is necessary because the Exact Match URL is
+not a stable transform of the image URL alone; it depends on Google-generated
+Lens session parameters from the first response.
 
 ```mermaid
 flowchart TD
@@ -171,10 +186,22 @@ Health check:
 curl "http://127.0.0.1:8000/healthz"
 ```
 
+Hosted health check:
+
+```bash
+curl "https://api-for-google-lens-production.up.railway.app/healthz"
+```
+
 Example API call:
 
 ```bash
 curl 'http://127.0.0.1:8000/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+```
+
+Hosted API call:
+
+```bash
+curl 'https://api-for-google-lens-production.up.railway.app/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
 ```
 
 If Google or the configured provider returns CAPTCHA, bot-check, or Google error
@@ -198,7 +225,9 @@ python3 -m compileall -q app tests
 ## Measure
 
 Use `scripts/measure_lens_api.py` against a running local or hosted API to
-produce latency, validity, and error-rate evidence. The script writes
+produce latency, validity, and failure-rate evidence. Invalid `200` responses
+that do not contain valid Exact Match HTML count against the error-rate
+threshold because they would fail challenge scoring. The script writes
 `report.json`, `verdict.json`, `samples.jsonl`, and `report.md` under
 `.runtime/runs/lens-measure-...`.
 
@@ -215,15 +244,30 @@ python3 scripts/measure_lens_api.py \
   --max-error-rate 0.5
 ```
 
+Hosted smoke measurement:
+
+```bash
+python3 scripts/measure_lens_api.py \
+  --base-url https://api-for-google-lens-production.up.railway.app \
+  --image-url 'https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG' \
+  --requests 5 \
+  --concurrency 2 \
+  --min-valid-exact 1 \
+  --max-average-latency-seconds 60 \
+  --max-error-rate 0.5
+```
+
 Credit-conscious 5-minute estimate:
 
 ```bash
 python3 scripts/measure_lens_api.py \
-  --base-url https://your-host.example \
+  --base-url https://api-for-google-lens-production.up.railway.app \
   --image-url-file .runtime/live-image-urls.txt \
   --requests 84 \
   --concurrency 16 \
   --rate-per-minute 16.7 \
+  --randomize-image-urls \
+  --image-url-seed 20260516 \
   --target five-minute-estimate
 ```
 
@@ -239,11 +283,13 @@ Full 1-hour challenge evidence run:
 
 ```bash
 python3 scripts/measure_lens_api.py \
-  --base-url https://your-host.example \
+  --base-url https://api-for-google-lens-production.up.railway.app \
   --image-url-file .runtime/live-image-urls.txt \
   --requests 1000 \
   --concurrency 16 \
   --rate-per-minute 16.7 \
+  --randomize-image-urls \
+  --image-url-seed 20260516 \
   --target challenge
 ```
 

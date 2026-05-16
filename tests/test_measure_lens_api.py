@@ -40,6 +40,47 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(verdict, "invalid_2xx")
         self.assertEqual(html_verdict, "unknown")
 
+    def test_builds_deterministic_image_url_schedule_by_cycling(self) -> None:
+        schedule = measure_lens_api.build_image_url_schedule(
+            ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            request_count=5,
+            randomize=False,
+        )
+
+        self.assertEqual(
+            schedule,
+            [
+                "https://example.com/a.jpg",
+                "https://example.com/b.jpg",
+                "https://example.com/a.jpg",
+                "https://example.com/b.jpg",
+                "https://example.com/a.jpg",
+            ],
+        )
+
+    def test_builds_seeded_random_image_url_schedule_without_replacement_per_cycle(self) -> None:
+        image_urls = [
+            "https://example.com/a.jpg",
+            "https://example.com/b.jpg",
+            "https://example.com/c.jpg",
+        ]
+
+        first = measure_lens_api.build_image_url_schedule(
+            image_urls,
+            request_count=5,
+            randomize=True,
+            seed=7,
+        )
+        second = measure_lens_api.build_image_url_schedule(
+            image_urls,
+            request_count=5,
+            randomize=True,
+            seed=7,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(set(first[:3]), set(image_urls))
+
     def test_summarizes_metrics_and_threshold_checks(self) -> None:
         results = [
             measure_lens_api.MeasurementResult(
@@ -70,7 +111,7 @@ class MeasureLensApiTests(unittest.TestCase):
         thresholds = measure_lens_api.Thresholds(
             min_valid_exact=1,
             max_average_latency_seconds=2.1,
-            max_error_rate=0.34,
+            max_error_rate=0.67,
         )
 
         summary = measure_lens_api.summarize_results(results, thresholds)
@@ -80,7 +121,8 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(summary["metrics"]["validExactMatchCount"], 1)
         self.assertEqual(summary["metrics"]["invalid2xxCount"], 1)
         self.assertAlmostEqual(summary["metrics"]["averageLatencySeconds"], 2.0)
-        self.assertAlmostEqual(summary["metrics"]["errorRate"], 1 / 3)
+        self.assertEqual(summary["metrics"]["errorCount"], 2)
+        self.assertAlmostEqual(summary["metrics"]["errorRate"], 2 / 3)
         self.assertIsNone(summary["projectedHourEstimate"])
 
     def test_summarizes_projected_hour_estimate(self) -> None:
@@ -149,6 +191,21 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(thresholds.min_valid_exact, 25)
         self.assertEqual(thresholds.max_average_latency_seconds, 60.0)
         self.assertEqual(thresholds.max_error_rate, 0.10)
+
+    def test_resolves_mrscraper_override_header_from_env_name(self) -> None:
+        headers = measure_lens_api.resolve_request_headers(
+            "MRSCRAPER_API_KEY",
+            {"MRSCRAPER_API_KEY": " atk_example "},
+        )
+
+        self.assertEqual(headers, {"X-MrScraper-Api-Key": "atk_example"})
+
+    def test_rejects_empty_mrscraper_override_header_env_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "MRSCRAPER_API_KEY"):
+            measure_lens_api.resolve_request_headers(
+                "MRSCRAPER_API_KEY",
+                {"MRSCRAPER_API_KEY": " "},
+            )
 
     def test_threshold_failure_is_reported(self) -> None:
         results = [

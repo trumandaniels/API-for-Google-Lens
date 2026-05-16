@@ -7,11 +7,43 @@ from dataclasses import dataclass
 import random
 
 from app.config import Settings
-from app.errors import BotBlockError, ExactMatchNotFoundError, GoogleErrorPageError, UpstreamRequestError
+from app.errors import (
+    BotBlockError,
+    ExactMatchNotFoundError,
+    GoogleErrorPageError,
+    ProviderCreditsExhaustedError,
+    UpstreamRequestError,
+)
 from app.lens.classifier import HtmlVerdict, classify_google_html
 from app.lens.direct import DirectLensClient
 from app.models import ExactMatchHtml, ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
+
+
+PROVIDER_CREDIT_ERROR_DETAIL = (
+    "Out of Proxy Credits. Provide your own MrScraper API key with "
+    "X-MrScraper-Api-Key or add credits to trumanadaniels at gmail dot com."
+)
+PROVIDER_CREDIT_ERROR_MARKERS = (
+    "out of proxy credits",
+    "proxy credits",
+    "insufficient credits",
+    "not enough credits",
+)
+
+
+def is_provider_credit_error(html: str) -> bool:
+    """Return whether a provider response indicates exhausted proxy credits.
+
+    Args:
+        html: Upstream response body returned by the scraping provider.
+
+    Returns:
+        `True` when the body contains a known credit-exhaustion marker.
+    """
+
+    normalized = html.lower()
+    return any(marker in normalized for marker in PROVIDER_CREDIT_ERROR_MARKERS)
 
 
 @dataclass(frozen=True)
@@ -103,6 +135,8 @@ class GoogleLensService:
 
         Raises:
             UpstreamRequestError: If Google returns a non-success HTTP status.
+            ProviderCreditsExhaustedError: If the provider token has run out
+                of proxy credits.
             BotBlockError: If the response appears to be CAPTCHA or bot-check HTML.
             GoogleErrorPageError: If the response appears to be a Google error page.
             ExactMatchNotFoundError: If the response cannot be classified as Exact
@@ -112,6 +146,8 @@ class GoogleLensService:
             await self.wait_before_upstream_request()
             response = await self.client.fetch_exact_match_html(image_url, token_override)
 
+        if is_provider_credit_error(response.html):
+            raise ProviderCreditsExhaustedError(PROVIDER_CREDIT_ERROR_DETAIL)
         if response.status_code >= 500:
             raise UpstreamRequestError("Google returned a server error")
         if response.status_code >= 400:

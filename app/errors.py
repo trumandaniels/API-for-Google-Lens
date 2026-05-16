@@ -28,6 +28,11 @@ class UpstreamRequestError(LensApiError):
 
 
 @dataclass
+class ProviderCreditsExhaustedError(LensApiError):
+    """Raised when the scraping provider reports exhausted proxy credits."""
+
+
+@dataclass
 class UpstreamTimeoutError(LensApiError):
     """Raised when the direct Google request exceeds the configured timeout."""
 
@@ -62,6 +67,7 @@ class HttpError:
 
 ERROR_STATUS_MAP: dict[type[LensApiError], HTTPStatus] = {
     MalformedImageUrlError: HTTPStatus.BAD_REQUEST,
+    ProviderCreditsExhaustedError: HTTPStatus.PAYMENT_REQUIRED,
     UpstreamTimeoutError: HTTPStatus.GATEWAY_TIMEOUT,
     UpstreamRequestError: HTTPStatus.BAD_GATEWAY,
     BotBlockError: HTTPStatus.TOO_MANY_REQUESTS,

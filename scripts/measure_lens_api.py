@@ -40,12 +40,15 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import random
 import statistics
 import time
 from typing import Any
 from urllib.parse import urljoin
 
+from app.config import parse_env_file
 from app.lens.classifier import HtmlVerdict, classify_google_html
 
 CHALLENGE_MIN_VALID_EXACT = 300
@@ -143,6 +146,44 @@ def load_image_urls(image_urls: list[str], image_url_file: Path | None) -> list[
     return loaded_urls
 
 
+def build_image_url_schedule(
+    image_urls: list[str],
+    request_count: int,
+    randomize: bool,
+    seed: int | None = None,
+) -> list[str]:
+    """Build the per-request image URL schedule.
+
+    Args:
+        image_urls: Candidate image URLs.
+        request_count: Number of API requests to schedule.
+        randomize: Whether to randomize URL order.
+        seed: Optional random seed for reproducible measurements.
+
+    Returns:
+        Image URL list with exactly `request_count` entries. Randomized
+        schedules sample without replacement until the input set is exhausted,
+        then reshuffle for the next cycle.
+
+    Raises:
+        ValueError: If `request_count` is less than one.
+    """
+
+    if request_count < 1:
+        raise ValueError("--requests must be at least 1")
+
+    if not randomize:
+        return [image_urls[index % len(image_urls)] for index in range(request_count)]
+
+    rng = random.Random(seed)
+    schedule: list[str] = []
+    while len(schedule) < request_count:
+        batch = list(image_urls)
+        rng.shuffle(batch)
+        schedule.extend(batch)
+    return schedule[:request_count]
+
+
 def percentile(values: list[float], percentile_value: float) -> float:
     """Return a nearest-rank percentile from numeric values.
 
@@ -192,6 +233,10 @@ def summarize_results(
 ) -> dict[str, Any]:
     """Summarize request measurements and compute threshold verdicts.
 
+    Invalid 2xx responses count toward `errorRate` because challenge scoring
+    cares whether the API returned valid Exact Match HTML, not just whether the
+    HTTP transport completed successfully.
+
     Args:
         results: Per-request measurements.
         thresholds: Optional pass/fail thresholds.
@@ -211,7 +256,7 @@ def summarize_results(
     bot_blocks = sum(result.verdict == "bot_block" for result in results)
     http_errors = sum(result.verdict == "http_error" for result in results)
     network_errors = sum(result.verdict == "network_error" for result in results)
-    error_count = http_errors + network_errors + bot_blocks
+    error_count = http_errors + network_errors + bot_blocks + invalid_2xx
 
     metrics: dict[str, Any] = {
         "totalRequests": total,
@@ -309,6 +354,7 @@ async def measure_one(
     endpoint_url: str,
     image_url: str,
     index: int,
+    request_headers: dict[str, str] | None = None,
 ) -> MeasurementResult:
     """Measure one `/google-lens` request.
 
@@ -317,6 +363,7 @@ async def measure_one(
         endpoint_url: Full `/google-lens` URL.
         image_url: Image URL to submit.
         index: Request index.
+        request_headers: Optional HTTP headers to send with the API request.
 
     Returns:
         Per-request measurement.
@@ -324,7 +371,11 @@ async def measure_one(
 
     started = time.perf_counter()
     try:
-        response = await client.get(endpoint_url, params={"imageUrl": image_url})
+        response = await client.get(
+            endpoint_url,
+            params={"imageUrl": image_url},
+            headers=request_headers,
+        )
         latency = time.perf_counter() - started
         verdict, html_verdict = classify_response(
             response.status_code,
@@ -354,22 +405,24 @@ async def measure_one(
 
 async def run_measurement(
     base_url: str,
-    image_urls: list[str],
+    image_url_schedule: list[str],
     request_count: int,
     concurrency: int,
     rate_per_minute: float | None,
     timeout_seconds: float,
+    request_headers: dict[str, str] | None = None,
 ) -> list[MeasurementResult]:
     """Run a latency and validity measurement set.
 
     Args:
         base_url: Base API URL.
-        image_urls: Image URLs to cycle through.
+        image_url_schedule: Per-request image URL schedule.
         request_count: Number of API requests to send.
         concurrency: Maximum concurrent API requests.
         rate_per_minute: Optional launch rate. `None` starts work as quickly as
             concurrency allows.
         timeout_seconds: Per-request client timeout.
+        request_headers: Optional HTTP headers to send with every API request.
 
     Returns:
         Per-request measurements.
@@ -377,6 +430,8 @@ async def run_measurement(
 
     if request_count < 1:
         raise ValueError("--requests must be at least 1")
+    if len(image_url_schedule) != request_count:
+        raise ValueError("image URL schedule length must match --requests")
     if concurrency < 1:
         raise ValueError("--concurrency must be at least 1")
     if rate_per_minute is not None and rate_per_minute <= 0:
@@ -393,8 +448,14 @@ async def run_measurement(
 
         async def run_index(index: int) -> None:
             async with semaphore:
-                image_url = image_urls[index % len(image_urls)]
-                result = await measure_one(client, endpoint_url, image_url, index)
+                image_url = image_url_schedule[index]
+                result = await measure_one(
+                    client,
+                    endpoint_url,
+                    image_url,
+                    index,
+                    request_headers,
+                )
                 results.append(result)
 
         tasks: list[asyncio.Task[None]] = []
@@ -531,6 +592,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
+        "--randomize-image-urls",
+        action="store_true",
+        help=(
+            "Shuffle the image URL schedule before measuring. Sampling is "
+            "without replacement until the input list is exhausted."
+        ),
+    )
+    parser.add_argument(
+        "--image-url-seed",
+        type=int,
+        help="Optional seed for reproducible randomized image URL schedules.",
+    )
+    parser.add_argument(
         "--target",
         choices=["none", "challenge", "five-minute-estimate"],
         default="none",
@@ -539,7 +613,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-valid-exact", type=int)
     parser.add_argument("--max-average-latency-seconds", type=float)
     parser.add_argument("--max-error-rate", type=float)
+    parser.add_argument(
+        "--mrscraper-api-key-env",
+        help=(
+            "Name of an environment variable or repo .env key whose value "
+            "should be sent as X-MrScraper-Api-Key. The token is not written "
+            "to measurement artifacts."
+        ),
+    )
     return parser.parse_args()
+
+
+def resolve_request_headers(
+    mrscraper_api_key_env: str | None,
+    environ: dict[str, str],
+) -> dict[str, str]:
+    """Build optional request headers for trusted hosted measurements.
+
+    Args:
+        mrscraper_api_key_env: Name of the environment variable containing a
+            MrScraper token for the API's trusted override header.
+        environ: Environment mapping merged from `.env` and process values.
+
+    Returns:
+        Headers to send with each measured request.
+
+    Raises:
+        ValueError: If a requested token environment key is unset or empty.
+    """
+
+    if mrscraper_api_key_env is None:
+        return {}
+
+    token = environ.get(mrscraper_api_key_env, "").strip()
+    if not token:
+        raise ValueError(f"{mrscraper_api_key_env} is empty or unset")
+    return {"X-MrScraper-Api-Key": token}
 
 
 def resolve_projection_multiplier(args: argparse.Namespace) -> float | None:
@@ -617,10 +726,18 @@ async def async_main() -> int:
     """Run measurement and write artifacts."""
 
     args = parse_args()
+    repo_root = Path(__file__).resolve().parent.parent
+    merged_environ = {**parse_env_file(repo_root / ".env"), **os.environ}
+    request_headers = resolve_request_headers(args.mrscraper_api_key_env, merged_environ)
     image_urls = load_image_urls(args.image_url, args.image_url_file)
+    image_url_schedule = build_image_url_schedule(
+        image_urls,
+        args.requests,
+        args.randomize_image_urls,
+        args.image_url_seed,
+    )
     projection_multiplier = resolve_projection_multiplier(args)
     thresholds = build_thresholds(args, projection_multiplier)
-    repo_root = Path(__file__).resolve().parent.parent
     output_dir = args.output_dir or repo_root / ".runtime" / "runs" / f"lens-measure-{safe_timestamp()}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -628,11 +745,12 @@ async def async_main() -> int:
     wall_started = time.perf_counter()
     results = await run_measurement(
         base_url=args.base_url,
-        image_urls=image_urls,
+        image_url_schedule=image_url_schedule,
         request_count=args.requests,
         concurrency=args.concurrency,
         rate_per_minute=args.rate_per_minute,
         timeout_seconds=args.timeout_seconds,
+        request_headers=request_headers,
     )
     elapsed_seconds = time.perf_counter() - wall_started
     finished_at = utc_timestamp()
@@ -647,8 +765,13 @@ async def async_main() -> int:
         "concurrency": args.concurrency,
         "finishedAt": finished_at,
         "imageUrlCount": len(image_urls),
+        "imageUrlScheduleHash": hash_url("\n".join(image_url_schedule)),
+        "imageUrlSeed": args.image_url_seed,
         "outputDir": str(output_dir),
         "projectionMultiplier": projection_multiplier,
+        "providerTokenOverride": bool(request_headers),
+        "providerTokenEnv": args.mrscraper_api_key_env if request_headers else None,
+        "randomizeImageUrls": args.randomize_image_urls,
         "ratePerMinute": args.rate_per_minute,
         "requestCount": args.requests,
         "startedAt": started_at,
