@@ -247,7 +247,8 @@ challenge: each request still goes through MrScraper API-token mode, reaches the
 Google Lens Search page, follows the Exact Match `udm=48` tab, classifies the
 HTML, and returns only actual Exact Match content.
 
-Two measured optimizations are currently kept:
+Two measured latency optimizations and one diagnostic hardening change are
+currently kept:
 
 - `MAX_CONCURRENCY` defaults to `16` process-wide upstream slots. This is high
   enough to keep the API responsive at the evaluator's 16.7 requests/minute
@@ -265,6 +266,12 @@ Two measured optimizations are currently kept:
   connection pooling as a way to reuse TCP connections and reduce latency,
   round-trips, and connection churn:
   <https://www.python-httpx.org/advanced/clients/>.
+- Provider-hop timing is logged for each upstream Lens entry and Exact Match
+  fetch. This does not reduce latency by itself, but it was added after the
+  research pass because the dominant open question is whether latency comes
+  from hop one, hop two, or local queueing. Logs include hop name, status,
+  elapsed milliseconds, response byte count, and HTTP protocol version without
+  logging API tokens or full image URLs.
 
 Recent local live measurements with the same `.runtime/live-image-urls.txt`
 input set:
@@ -276,6 +283,7 @@ input set:
 | Kept concurrency setting | `MAX_CONCURRENCY=16`, shared `httpx.AsyncClient` | 48 | 48 | 0% | 28.62s | 40.49s | 834 valid/hour | Kept; best throughput evidence so far |
 | Rejected provider resource blocking | `MAX_CONCURRENCY=4` from local `.env`, `MRSCRAPER_BLOCK_RESOURCES=true` | 18 | 18 | 0% | 49.26s | 76.13s | 472 valid/hour | Rejected; MrScraper's resource-blocking hint was slower for this Lens flow |
 | Kept low-jitter setting | `MAX_CONCURRENCY=16`, `REQUEST_DELAY_MIN_SECONDS=0`, `REQUEST_DELAY_MAX_SECONDS=0.25`, `MRSCRAPER_BLOCK_RESOURCES=false` | 18 | 18 | 0% | 22.22s | 26.48s | 943 valid/hour | Kept; about 22% lower average latency than the prior kept 16-slot run |
+| Rejected HTTPX pool tuning | `MAX_CONCURRENCY=16`, low jitter, `max_connections=16`, `max_keepalive_connections=16`, `keepalive_expiry=30s` | 18 | 18 | 0% | 25.66s | 32.29s | 657 valid/hour | Rejected; validity stayed perfect, but latency regressed versus the 22.22s low-jitter run |
 
 The `MAX_CONCURRENCY=8` pressure run stayed under the 60-second latency target,
 but it did not materially improve observed throughput and pushed p95 latency
@@ -291,6 +299,15 @@ this API returns HTML, not screenshots or page assets. It was rejected because
 the measured Google Lens path got slower and had a higher tail latency. The
 option remains available as `MRSCRAPER_BLOCK_RESOURCES=true` for future hosted
 provider tests, but it is not the default.
+
+The HTTPX pool-tuning experiment came from the same research pass. HTTPX
+documents configurable connection limits and keepalive expiry:
+<https://www.python-httpx.org/advanced/resource-limits/>. The tested setting
+matched the 16-slot upstream limiter exactly and extended keepalive expiry to
+30 seconds. It kept Exact Match validity perfect but increased average latency,
+so the default pool behavior remains the earlier measured setting:
+`max_connections=max(MAX_CONCURRENCY * 2, 20)` and
+`max_keepalive_connections=max(MAX_CONCURRENCY, 10)`.
 
 These are local live measurements, not a substitute for the final hosted
 one-hour run. Use the 84-request five-minute estimate before claiming a hosted
@@ -324,6 +341,9 @@ Measured local contributors:
   API. HTTPX resource limits are configured with enough keep-alive connections
   for the current `MAX_CONCURRENCY=16` default:
   <https://www.python-httpx.org/advanced/resource-limits/>.
+- Provider-hop logs now show whether slow requests are spending time in the
+  Lens entry hop or the Exact Match hop. This is the next useful diagnostic
+  before spending another 84-request five-minute estimate.
 - Concurrency is a throughput and queueing lever, not a pure per-request
   latency lever. The 8-slot run was slower than both the 4-slot baseline and the
   16-slot run, which suggests provider-side scheduling variance matters and

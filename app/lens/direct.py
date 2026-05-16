@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import unescape
+import logging
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from app.errors import UpstreamRequestError, UpstreamTimeoutError
 from app.models import ImageUrl
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -205,26 +209,46 @@ class DirectLensClient:
 
         timeout = httpx.Timeout(self.timeout_seconds)
 
-        async def get(url: str, request_headers: dict[str, str]) -> httpx.Response:
+        async def get(
+            url: str,
+            request_headers: dict[str, str],
+            hop_name: str,
+        ) -> httpx.Response:
+            started = time.perf_counter()
             try:
                 if self.http_client is not None:
-                    return await self.http_client.get(url, headers=request_headers)
-                async with httpx.AsyncClient(
-                    follow_redirects=True,
-                    timeout=timeout,
-                    trust_env=False,
-                ) as client:
-                    return await client.get(url, headers=request_headers)
+                    response = await self.http_client.get(url, headers=request_headers)
+                else:
+                    async with httpx.AsyncClient(
+                        follow_redirects=True,
+                        timeout=timeout,
+                        trust_env=False,
+                    ) as client:
+                        response = await client.get(url, headers=request_headers)
+                LOGGER.info(
+                    "lens_provider_hop hop=%s status=%s elapsed_ms=%.0f "
+                    "bytes=%s http_version=%s",
+                    hop_name,
+                    response.status_code,
+                    (time.perf_counter() - started) * 1000,
+                    len(response.content),
+                    response.http_version,
+                )
+                return response
             except httpx.TimeoutException as error:
                 raise UpstreamTimeoutError("Google Lens request timed out") from error
             except httpx.HTTPError as error:
                 raise UpstreamRequestError("Google Lens request failed") from error
 
-        response = await get(request_url, headers)
+        response = await get(request_url, headers, "lens_entry")
         exact_url = self.find_exact_match_tab_url(response.text)
         if exact_url is not None:
             final_url = exact_url
-            response = await get(self.build_mrscraper_api_url(exact_url), headers)
+            response = await get(
+                self.build_mrscraper_api_url(exact_url),
+                headers,
+                "exact_match",
+            )
 
         return DirectLensResponse(
             html=response.text,
