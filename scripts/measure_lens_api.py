@@ -20,6 +20,15 @@ Challenge-style run:
         --concurrency 4 \\
         --rate-per-minute 16.7 \\
         --target challenge
+
+Credit-conscious five-minute estimate:
+    python3 scripts/measure_lens_api.py \\
+        --base-url https://your-host.example \\
+        --image-url-file .runtime/live-image-urls.txt \\
+        --requests 84 \\
+        --concurrency 4 \\
+        --rate-per-minute 16.7 \\
+        --target five-minute-estimate
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import statistics
 import time
@@ -41,6 +51,7 @@ from app.lens.classifier import HtmlVerdict, classify_google_html
 CHALLENGE_MIN_VALID_EXACT = 300
 CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS = 60.0
 CHALLENGE_MAX_ERROR_RATE = 0.10
+FIVE_MINUTE_PROJECTION_MULTIPLIER = 12.0
 
 
 @dataclass(frozen=True)
@@ -176,6 +187,7 @@ def classify_response(status_code: int, body: str, final_url: str) -> tuple[str,
 def summarize_results(
     results: list[MeasurementResult],
     thresholds: Thresholds | None,
+    projection_multiplier: float | None = None,
 ) -> dict[str, Any]:
     """Summarize request measurements and compute threshold verdicts.
 
@@ -211,6 +223,24 @@ def summarize_results(
         "p95LatencySeconds": percentile(latencies, 95),
         "maxLatencySeconds": max(latencies) if latencies else 0.0,
     }
+    projected_hour_estimate = None
+    if projection_multiplier is not None:
+        projected_hour_estimate = {
+            "projectionMultiplier": projection_multiplier,
+            "totalRequests": round(total * projection_multiplier),
+            "validExactMatchCount": round(valid_exact * projection_multiplier),
+            "invalid2xxCount": round(invalid_2xx * projection_multiplier),
+            "botBlockCount": round(bot_blocks * projection_multiplier),
+            "httpErrorCount": round(http_errors * projection_multiplier),
+            "networkErrorCount": round(network_errors * projection_multiplier),
+            "errorCount": round(error_count * projection_multiplier),
+            "validExactMatchRate": metrics["validExactMatchRate"],
+            "errorRate": metrics["errorRate"],
+            "averageLatencySeconds": metrics["averageLatencySeconds"],
+            "p50LatencySeconds": metrics["p50LatencySeconds"],
+            "p95LatencySeconds": metrics["p95LatencySeconds"],
+            "maxLatencySeconds": metrics["maxLatencySeconds"],
+        }
 
     checks: dict[str, bool] = {}
     if thresholds is not None:
@@ -226,6 +256,7 @@ def summarize_results(
         "checks": checks,
         "metrics": metrics,
         "passed": all(checks.values()) if checks else None,
+        "projectedHourEstimate": projected_hour_estimate,
         "thresholds": asdict(thresholds) if thresholds is not None else None,
     }
 
@@ -351,6 +382,7 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
     """Render a compact human-readable measurement report."""
 
     metrics = summary["metrics"]
+    projected_hour_estimate = summary["projectedHourEstimate"]
     thresholds = summary["thresholds"]
     lines = [
         "# Google Lens API Measurement",
@@ -374,6 +406,31 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
         f"- HTTP errors: `{metrics['httpErrorCount']}`",
         f"- Invalid 2xx responses: `{metrics['invalid2xxCount']}`",
     ]
+    if projected_hour_estimate is not None:
+        lines.extend(
+            [
+                "",
+                "## Projected Hour Estimate",
+                "",
+                (
+                    "- Projection multiplier: "
+                    f"`{projected_hour_estimate['projectionMultiplier']}`"
+                ),
+                (
+                    "- Projected total requests: "
+                    f"`{projected_hour_estimate['totalRequests']}`"
+                ),
+                (
+                    "- Projected valid Exact Match responses: "
+                    f"`{projected_hour_estimate['validExactMatchCount']}`"
+                ),
+                f"- Projected error rate: `{projected_hour_estimate['errorRate']:.3f}`",
+                (
+                    "- Projected average latency seconds: "
+                    f"`{projected_hour_estimate['averageLatencySeconds']:.3f}`"
+                ),
+            ]
+        )
     if thresholds is not None:
         lines.extend(
             [
@@ -404,14 +461,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rate-per-minute", type=float)
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--target", choices=["none", "challenge"], default="none")
+    parser.add_argument(
+        "--target",
+        choices=["none", "challenge", "five-minute-estimate"],
+        default="none",
+    )
+    parser.add_argument("--projection-multiplier", type=float)
     parser.add_argument("--min-valid-exact", type=int)
     parser.add_argument("--max-average-latency-seconds", type=float)
     parser.add_argument("--max-error-rate", type=float)
     return parser.parse_args()
 
 
-def build_thresholds(args: argparse.Namespace) -> Thresholds | None:
+def resolve_projection_multiplier(args: argparse.Namespace) -> float | None:
+    """Resolve the optional hourly projection multiplier.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        Projection multiplier, or `None` when no projection should be reported.
+
+    Raises:
+        ValueError: If an explicit multiplier is non-positive.
+    """
+
+    if args.projection_multiplier is not None:
+        if args.projection_multiplier <= 0:
+            raise ValueError("--projection-multiplier must be positive")
+        return args.projection_multiplier
+    if args.target == "five-minute-estimate":
+        return FIVE_MINUTE_PROJECTION_MULTIPLIER
+    return None
+
+
+def build_thresholds(
+    args: argparse.Namespace,
+    projection_multiplier: float | None = None,
+) -> Thresholds | None:
     """Build optional pass/fail thresholds from parsed arguments."""
 
     if args.target == "none" and all(
@@ -426,6 +513,11 @@ def build_thresholds(args: argparse.Namespace) -> Thresholds | None:
 
     if args.target == "challenge":
         default_min_valid = CHALLENGE_MIN_VALID_EXACT
+        default_max_latency = CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS
+        default_max_error_rate = CHALLENGE_MAX_ERROR_RATE
+    elif args.target == "five-minute-estimate":
+        multiplier = projection_multiplier or FIVE_MINUTE_PROJECTION_MULTIPLIER
+        default_min_valid = math.ceil(CHALLENGE_MIN_VALID_EXACT / multiplier)
         default_max_latency = CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS
         default_max_error_rate = CHALLENGE_MAX_ERROR_RATE
     else:
@@ -457,7 +549,8 @@ async def async_main() -> int:
 
     args = parse_args()
     image_urls = load_image_urls(args.image_url, args.image_url_file)
-    thresholds = build_thresholds(args)
+    projection_multiplier = resolve_projection_multiplier(args)
+    thresholds = build_thresholds(args, projection_multiplier)
     repo_root = Path(__file__).resolve().parent.parent
     output_dir = args.output_dir or repo_root / ".runtime" / "runs" / f"lens-measure-{safe_timestamp()}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -472,13 +565,14 @@ async def async_main() -> int:
         timeout_seconds=args.timeout_seconds,
     )
     finished_at = utc_timestamp()
-    summary = summarize_results(results, thresholds)
+    summary = summarize_results(results, thresholds, projection_multiplier)
     run_config = {
         "baseUrl": args.base_url,
         "concurrency": args.concurrency,
         "finishedAt": finished_at,
         "imageUrlCount": len(image_urls),
         "outputDir": str(output_dir),
+        "projectionMultiplier": projection_multiplier,
         "ratePerMinute": args.rate_per_minute,
         "requestCount": args.requests,
         "startedAt": started_at,
@@ -491,7 +585,14 @@ async def async_main() -> int:
     }
 
     write_json(output_dir / "report.json", artifact)
-    write_json(output_dir / "verdict.json", {"passed": summary["passed"], "metrics": summary["metrics"]})
+    write_json(
+        output_dir / "verdict.json",
+        {
+            "metrics": summary["metrics"],
+            "passed": summary["passed"],
+            "projectedHourEstimate": summary["projectedHourEstimate"],
+        },
+    )
     write_jsonl(output_dir / "samples.jsonl", results)
     (output_dir / "report.md").write_text(
         render_markdown_report(summary, run_config),

@@ -183,7 +183,25 @@ python3 scripts/measure_lens_api.py \
   --max-error-rate 0.5
 ```
 
-Challenge-style evidence run:
+Credit-conscious 5-minute estimate:
+
+```bash
+python3 scripts/measure_lens_api.py \
+  --base-url https://your-host.example \
+  --image-url-file .runtime/live-image-urls.txt \
+  --requests 84 \
+  --concurrency 4 \
+  --rate-per-minute 16.7 \
+  --target five-minute-estimate
+```
+
+The 5-minute estimate is the preferred routine measurement because it uses
+about one-twelfth of the credits of a full challenge run. It projects the
+observed counts by `12` to estimate a 1-hour result and checks the scaled
+thresholds: at least 25 valid Exact Match HTML responses in 5 minutes, average
+latency at or below 60 seconds, and error rate at or below 10%.
+
+Full 1-hour challenge evidence run:
 
 ```bash
 python3 scripts/measure_lens_api.py \
@@ -198,7 +216,9 @@ python3 scripts/measure_lens_api.py \
 `--target challenge` checks the scoring targets currently tracked in the local
 spec: at least 300 valid Exact Match HTML responses, average latency at or below
 60 seconds, and error rate at or below 10%. Image URLs are recorded only as
-short hashes in measurement artifacts.
+short hashes in measurement artifacts. Use this full run as final evidence
+before submission or when claiming a hosted max concurrency, not as the default
+iteration loop.
 
 ## Provider Configuration
 

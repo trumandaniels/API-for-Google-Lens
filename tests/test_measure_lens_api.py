@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from argparse import Namespace
 import sys
 import unittest
 from pathlib import Path
@@ -80,6 +81,47 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(summary["metrics"]["invalid2xxCount"], 1)
         self.assertAlmostEqual(summary["metrics"]["averageLatencySeconds"], 2.0)
         self.assertAlmostEqual(summary["metrics"]["errorRate"], 1 / 3)
+        self.assertIsNone(summary["projectedHourEstimate"])
+
+    def test_summarizes_projected_hour_estimate(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=index,
+                image_url_hash=str(index),
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+            )
+            for index in range(2)
+        ]
+
+        summary = measure_lens_api.summarize_results(
+            results,
+            thresholds=None,
+            projection_multiplier=12.0,
+        )
+
+        self.assertEqual(summary["projectedHourEstimate"]["totalRequests"], 24)
+        self.assertEqual(summary["projectedHourEstimate"]["validExactMatchCount"], 24)
+        self.assertEqual(summary["projectedHourEstimate"]["errorRate"], 0.0)
+
+    def test_five_minute_estimate_uses_scaled_challenge_threshold(self) -> None:
+        args = Namespace(
+            target="five-minute-estimate",
+            projection_multiplier=None,
+            min_valid_exact=None,
+            max_average_latency_seconds=None,
+            max_error_rate=None,
+        )
+
+        projection_multiplier = measure_lens_api.resolve_projection_multiplier(args)
+        thresholds = measure_lens_api.build_thresholds(args, projection_multiplier)
+
+        self.assertEqual(projection_multiplier, 12.0)
+        self.assertEqual(thresholds.min_valid_exact, 25)
+        self.assertEqual(thresholds.max_average_latency_seconds, 60.0)
+        self.assertEqual(thresholds.max_error_rate, 0.10)
 
     def test_threshold_failure_is_reported(self) -> None:
         results = [
