@@ -1,139 +1,122 @@
 # Google Lens Exact Match API
 
-FastAPI implementation of the Google Lens scraping challenge in
-[`docs/challenge/`](docs/challenge/). The service accepts a public image URL,
-drives the Google Lens Exact Match flow through MrScraper's API-token HTML
-fetch mode, and returns the raw Exact Match results page HTML.
+I built this API around a specific Google Lens behavior: image URL search works
+in the browser, but the Exact Match page only appears after Google creates a
+Lens/Search session. The service takes a public image URL, follows that session
+flow, and returns the raw Exact Match HTML.
 
 Hosted API:
 [`https://api-for-google-lens-production.up.railway.app`](https://api-for-google-lens-production.up.railway.app)
 
-## Challenge Requirements, Up Front
+The Railway deployment uses my configured MrScraper credits by default. If that
+account runs out, the API returns `402`; pass your own MrScraper token in
+`X-MrScraper-Api-Key` and the same hosted endpoint will use it for that request.
 
-Source of truth: [`docs/challenge/SPEC.md`](docs/challenge/SPEC.md) extracted
-from the challenge PDF in [`docs/challenge/`](docs/challenge/).
+## What Is Interesting Here
 
-| Challenge requirement | Implementation status |
-| --- | --- |
-| `GET /google-lens?imageUrl=...` | Implemented in FastAPI with typed query parsing. |
-| Return the full Exact Match page HTML | Implemented; successful responses are `text/html` raw Google Exact Match HTML. |
-| Automate Lens URL search into Exact Match | Implemented as a two-hop Lens/Search flow: Lens `uploadbyurl`, then extracted `udm=48` Exact Match tab. |
-| Use a reverse-engineered/direct request approach | Implemented without Playwright, Selenium, stealth browser code, or browser fallback. |
-| Use MrScraper for Google-facing fetching | Implemented through MrScraper API-token HTML fetch mode with `html=true` and `super=true`. |
-| Avoid returning CAPTCHA/error pages as success | Implemented with HTML classification before returning `200`. |
-| Meaningful status codes | `400`, `402`, `429`, `502`, and `504` are explicitly mapped. |
-| Local setup, run, and tests | Documented below; deterministic harness passes. |
-| Hosted API link | Deployed on Railway; URL above. |
-| Maximum supported concurrency | Current measured default is `MAX_CONCURRENCY=16` per API process. |
-| Challenge scoring target | Latest hosted sample projected 954-1002 valid Exact Match responses/hour, 0% errors, 27.95s average latency. Full final one-hour run is still the last submission proof step. |
+The useful part is the reverse-engineered Lens flow.
 
-Scoring targets tracked from the prompt:
+Google does not give you a stable Exact Match URL from the original image URL.
+The service first submits the image to `lens.google.com/uploadbyurl`, then
+parses the returned Search/Lens page for the generated Exact Match tab. That
+tab carries `udm=48`, and it is tied to the session Google just created. Only
+after fetching that generated URL does the API return HTML to the caller.
 
-| Target | Challenge threshold | Latest hosted evidence |
-| --- | ---: | ---: |
-| Valid Exact Match responses/hour | At least 300 of 1,000 | 954 observed-throughput estimate; 1002 planned projection |
-| Average latency | At most 60s | 27.95s |
-| Error rate | At most 10% | 0.0% |
-| Bot blocks in sample | Must not be returned as success | 0 |
+FastAPI handles the HTTP surface, Pydantic parses config, the Lens client builds the Google URLs,
+MrScraper handles the Google-facing fetches and proxy rotation, and a lightweight classifier keeps CAPTCHA,
+Google error, and ambiguous pages from being returned as successful responses.
 
-Latest hosted measurement:
-[`lens-measure-2026-05-16T20-13-03-139756Z`](.runtime/runs/lens-measure-2026-05-16T20-13-03-139756Z/report.md)
-sent 167 requests at concurrency 16 and a challenge-rate arrival pace.
+## Measured Behavior
 
-## API Contract
+To preserve MrScraper credits, I ran a 10-minute load test against the hosted
+Railway API instead of spending a full 1,000-request hour on every iteration.
+The run used 167 image-search requests, concurrency 16, and an arrival pace of
+16.7 requests per minute, then projected the same rate over an hour.
 
-```text
-GET /google-lens?imageUrl=<public_image_url>
-```
+- Valid Exact Match responses: 167 / 167
+- Error rate: 0.0%
+- Bot blocks: 0
+- Invalid `200` responses: 0
+- Average latency: 27.95s
+- p95 latency: 38.21s
+- Max latency: 42.84s
+- Observed-throughput hour estimate from the 10-minute run: 954 valid responses
+- Planned one-hour projection at the target arrival rate: 1002 valid responses
+
+The load target I optimized around is 1,000 requests over one hour, with at
+least 300 valid Exact Match pages, average latency under 60 seconds, and error
+rate under 10%.
+
+Maximum supported hosted concurrency is `MAX_CONCURRENCY=16` per API process.
+
+## API
+
+Endpoint: `GET /google-lens?imageUrl=<public_image_url>`.
 
 Example:
 
-```bash
-curl 'https://api-for-google-lens-production.up.railway.app/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
-```
+Set `HOST` to the hosted API above. Set `IMAGE` to any public image URL. Then
+run `curl "$HOST/google-lens?imageUrl=$IMAGE"`.
 
 Success:
 
-```text
-200 OK
-Content-Type: text/html
+The success response is `200 OK` with `Content-Type: text/html`. The body is
+the raw Google Lens Exact Match HTML.
 
-<raw Google Lens Exact Match HTML>
-```
+Errors are mapped explicitly:
 
-Error behavior:
+- `400`: `imageUrl` is empty, relative, hostless, or not `http`/`https`.
+- `402`: the configured MrScraper account is out of credits.
+- `429`: Google or the provider returned CAPTCHA, bot-check, or rate-limit HTML.
+- `502`: upstream returned an error page or a page that is not Exact Match.
+- `504`: provider or Google request timed out.
 
-| Status | Meaning |
-| ---: | --- |
-| `400` | `imageUrl` is empty, relative, hostless, or not `http`/`https`. |
-| `402` | The configured MrScraper account is out of credits. |
-| `429` | Google or the provider returned CAPTCHA, bot-check, or rate-limit HTML. |
-| `502` | Upstream returned an error page or a page that is not Exact Match results. |
-| `504` | Provider or Google request timed out. |
-
-If the hosted server runs out of MrScraper credits, callers can retry with
-their own MrScraper token:
+The hosted Railway endpoint may run out of the shared MrScraper credits during
+review. When that happens, retry the same request with your own MrScraper API
+key:
 
 ```bash
 curl \
   -H "X-MrScraper-Api-Key: atk_your_mrscraper_api_key" \
-  'https://api-for-google-lens-production.up.railway.app/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+  "$HOST/google-lens?imageUrl=$IMAGE"
 ```
 
-## Architecture
+## Request Flow
 
-The public route stays thin: parse the boundary, call the Lens service, return
-classified Exact Match HTML, or map a domain error to HTTP.
+Request path: client to FastAPI, parse `imageUrl`, check the cache, enter the
+concurrency limiter, fetch `https://lens.google.com/uploadbyurl?url=<image>`
+through MrScraper, extract the generated `udm=48` Exact Match URL, fetch that
+URL, classify the HTML, and return the raw page.
 
-```text
-Client
-  -> FastAPI /google-lens
-  -> ImageUrl parser
-  -> process-local cache
-  -> concurrency limiter + small jitter
-  -> MrScraper fetch: lens.google.com/uploadbyurl?url=<image>
-  -> parse Google's session-specific Exact Match tab URL containing udm=48
-  -> MrScraper fetch: extracted Exact Match URL
-  -> HTML classifier
-  -> raw Exact Match HTML response
-```
+Local HTTP probes against Google returned `403` pages, so live traffic goes
+through MrScraper's API-token HTML fetch mode. The application code owns the URL
+construction, pacing, response classification, and failure mapping.
 
-Important files:
+## Provider And Anti-Bot Strategy
 
-- [`app/api.py`](app/api.py): FastAPI routes and HTTP boundary.
-- [`app/models.py`](app/models.py): parsed domain values such as `ImageUrl`.
-- [`app/lens/direct.py`](app/lens/direct.py): MrScraper-backed Google Lens URL flow.
-- [`app/lens/service.py`](app/lens/service.py): throttling, caching, classification, and domain errors.
-- [`app/lens/classifier.py`](app/lens/classifier.py): Exact Match, CAPTCHA, and Google error detection.
-- [`app/config.py`](app/config.py): typed environment parsing.
-- [`scripts/measure_lens_api.py`](scripts/measure_lens_api.py): repeatable live scoring measurement.
+MrScraper is the Google-facing fetch layer. The app builds the target Google URL
+and sends it to MrScraper like this:
 
-## Why This Approach
+Provider request shape: `GET https://api.mrscraper.com?token=<token>&html=true&super=true&url=<google_url>`.
 
-The challenge rewards a direct/reverse-engineered request path over browser
-automation. This implementation therefore does not ship Playwright, Selenium,
-stealth drivers, local proxy pools, or CAPTCHA solving. It uses the smallest
-reliable request flow found during live probing:
+The local side keeps a narrow set of controls:
 
-1. Submit the image URL to Google's Lens `uploadbyurl` endpoint through
-   MrScraper.
-2. Let Google create the session-bound Search/Lens result page.
-3. Extract the Exact Match tab link containing `udm=48`.
-4. Fetch that Exact Match URL through MrScraper.
-5. Return the HTML only if classification confirms it is the Exact Match page.
+- Browser-like headers with a stable desktop Chrome user agent.
+- Process-wide concurrency capped by `MAX_CONCURRENCY`.
+- Randomized local pacing from `REQUEST_DELAY_MIN_SECONDS` to
+  `REQUEST_DELAY_MAX_SECONDS`.
+- A shared `httpx.AsyncClient` for provider requests.
+- A successful-response cache keyed by image URL.
+- HTML classification before success. CAPTCHA, Google sorry pages, Google
+  errors, empty bodies, and ambiguous pages do not return `200`.
 
-Plain local or datacenter HTTP requests returned Google `403` pages during
-live probes. The production path assumes MrScraper supplies Google-facing
-rotation and anti-bot handling, while this API controls local burstiness,
-timeouts, cache behavior, and failure classification.
-
-## Local Setup
+## Run Locally
 
 Requirements:
 
 - Python 3.12+
-- `uv` recommended, or `pip`
-- MrScraper API token for live Lens requests
+- `uv` or `pip`
+- A MrScraper API token for live Lens requests
 
 Install:
 
@@ -149,8 +132,7 @@ Configure:
 cp .env.example .env
 ```
 
-Set `MRSCRAPER_API_KEY` in `.env` or in the process environment. Do not commit
-real credentials.
+Set `MRSCRAPER_API_KEY` in `.env` or in the process environment.
 
 Run:
 
@@ -159,139 +141,97 @@ source .venv/bin/activate
 uvicorn app.main:app --reload
 ```
 
-Health check:
+Quick local request:
 
 ```bash
+IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+
 curl 'http://127.0.0.1:8000/healthz'
-```
-
-Local API call:
-
-```bash
-curl 'http://127.0.0.1:8000/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+curl "http://127.0.0.1:8000/google-lens?imageUrl=$IMAGE"
 ```
 
 ## Configuration
 
-Runtime settings are parsed once into typed configuration at process startup.
+Copy `.env.example` to `.env` and set `MRSCRAPER_API_KEY`. The rest can stay on
+the submitted defaults unless you are re-running load tests.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MRSCRAPER_API_KEY` | Required | MrScraper Scraper API token. |
-| `MRSCRAPER_API_URL` | `https://api.mrscraper.com` | MrScraper API endpoint. |
-| `GOOGLE_BASE_URL` | `https://lens.google.com/uploadbyurl` | Google Lens entry URL. |
-| `REQUEST_TIMEOUT_SECONDS` | `60.0` | Per provider-hop timeout. |
-| `MAX_CONCURRENCY` | `16` | In-process upstream concurrency limit. |
-| `REQUEST_DELAY_MIN_SECONDS` | `0.0` | Minimum local jitter before provider work. |
-| `REQUEST_DELAY_MAX_SECONDS` | `0.25` | Maximum local jitter before provider work. |
-| `RESPONSE_CACHE_MAX_ENTRIES` | `512` | Successful Exact Match cache size. |
-| `RESPONSE_CACHE_TTL_SECONDS` | `7200.0` | Successful Exact Match cache TTL. |
-| `MRSCRAPER_BLOCK_RESOURCES` | `false` | Optional provider hint; disabled because live tests were slower. |
-| `USER_AGENT` | Chrome/Linux UA | Browser-like upstream user agent. |
+```bash
+MRSCRAPER_API_KEY=atk_your_mrscraper_api_key
+MRSCRAPER_API_URL=https://api.mrscraper.com
+
+GOOGLE_BASE_URL=https://lens.google.com/uploadbyurl
+REQUEST_TIMEOUT_SECONDS=60.0
+
+MAX_CONCURRENCY=16
+REQUEST_DELAY_MIN_SECONDS=0.0
+REQUEST_DELAY_MAX_SECONDS=0.25
+
+RESPONSE_CACHE_MAX_ENTRIES=512
+RESPONSE_CACHE_TTL_SECONDS=7200.0
+
+MRSCRAPER_BLOCK_RESOURCES=false
+USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+```
+
+The app parses these once at startup. Process environment variables override
+matching `.env` values.
 
 ## Verification
 
-Run deterministic local checks:
+Local checks:
 
 ```bash
-python3 scripts/run_harness.py
-```
-
-Equivalent direct checks:
-
-```bash
-python3 scripts/lint_index.py
-python3 scripts/lint_exec_plans.py
-python3 scripts/lint_readmes.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 -m compileall -q app tests scripts
 ```
 
-Run a small live smoke measurement against the hosted API:
+Small hosted measurement:
 
-```bash
-python3 scripts/measure_lens_api.py \
-  --base-url https://api-for-google-lens-production.up.railway.app \
-  --image-url 'https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG' \
-  --requests 5 \
-  --concurrency 2 \
-  --min-valid-exact 1 \
-  --max-average-latency-seconds 60 \
-  --max-error-rate 0.5
-```
+Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url "$IMAGE" --requests 5 --concurrency 2 --min-valid-exact 1 --max-average-latency-seconds 60 --max-error-rate 0.5`.
 
-Run a credit-conscious challenge-rate estimate:
+167-request load estimate:
 
-```bash
-python3 scripts/measure_lens_api.py \
-  --base-url https://api-for-google-lens-production.up.railway.app \
-  --image-url-file .runtime/live-image-urls.txt \
-  --requests 167 \
-  --concurrency 16 \
-  --rate-per-minute 16.7 \
-  --randomize-image-urls \
-  --image-url-seed 20260516
-```
+Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 167 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516`.
 
-Run the full one-hour challenge profile before final submission:
+Full one-hour profile:
 
-```bash
-python3 scripts/measure_lens_api.py \
-  --base-url https://api-for-google-lens-production.up.railway.app \
-  --image-url-file .runtime/live-image-urls.txt \
-  --requests 1000 \
-  --concurrency 16 \
-  --rate-per-minute 16.7 \
-  --randomize-image-urls \
-  --image-url-seed 20260516 \
-  --target challenge
-```
+Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 1000 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516 --target challenge`.
 
-Measurement artifacts are written under `.runtime/runs/lens-measure-*` with
-`report.md`, `report.json`, `verdict.json`, and sampled response verdicts.
+Measurement artifacts are written under `.runtime/runs/lens-measure-*`.
 
-## Current Evidence
+## Optimization Notes
 
-The latest hosted measurement used the deployed Railway API, 167 image-search
-requests, concurrency 16, and a challenge-rate arrival pace of 16.7 requests
-per minute.
+Most request time is provider-side Google Lens fetch time. The local wins came
+from keeping enough upstream work in flight, avoiding repeated provider calls,
+and rejecting bad Google pages before they could count as successful API
+responses.
 
-| Metric | Result |
-| --- | ---: |
-| Valid Exact Match responses | 167 / 167 |
-| Error rate | 0.0% |
-| Bot blocks | 0 |
-| Invalid `200` responses | 0 |
-| Average latency | 27.95s |
-| p95 latency | 38.21s |
-| Max latency | 42.84s |
-| Observed-throughput hour estimate | 954 valid responses |
-| Planned projection | 1002 valid responses |
+Selected runtime settings:
 
-This is strong hosted evidence against the challenge thresholds, but it is not
-presented as a replacement for the final 1,000-request one-hour run.
+- `MAX_CONCURRENCY=16` per API process.
+- `REQUEST_DELAY_MIN_SECONDS=0.0` and `REQUEST_DELAY_MAX_SECONDS=0.25`.
+- Shared process-scoped `httpx.AsyncClient` for provider requests.
+- Successful Exact Match response cache with in-flight duplicate coalescing.
+- `MRSCRAPER_BLOCK_RESOURCES=false`.
+- No MrScraper `geoCode` override.
 
-## Engineering Notes
+Experiment history:
 
-- Boundary parsing follows "parse, don't validate": raw query strings and env
-  vars become typed values before business logic sees them.
-- The service rejects CAPTCHA, bot-check, Google error, and unknown pages
-  instead of returning them as successful HTML.
-- A process-scoped `httpx.AsyncClient` preserves connection pooling to the
-  provider API.
-- Successful Exact Match HTML is cached by normalized image URL, with duplicate
-  in-flight cache misses coalesced.
-- Provider-hop timing logs identify whether latency is coming from the Lens
-  entry hop or the Exact Match hop without logging API tokens.
-- Experiment history in the previous README informed the current defaults:
-  `MAX_CONCURRENCY=16`, low jitter, no provider resource blocking, and no
-  `geoCode` override.
+| Experiment | Why I tried it | Code/config change | Result | Decision |
+| --- | --- | --- | --- | --- |
+| Baseline | Establish the first live read on the MrScraper API-token path. | `MAX_CONCURRENCY=4`, `REQUEST_DELAY_MIN_SECONDS=0.25`, `REQUEST_DELAY_MAX_SECONDS=1.5`. | 84 requests, 84 valid, 0% errors, 26.19s avg, 34.25s max. | Solid correctness baseline, but likely under-feeding the provider for the one-hour target. |
+| Concurrency 8 | See whether more upstream slots improved throughput without hurting validity. | Raised the in-process limiter to 8 and reused one process-scoped `httpx.AsyncClient` instead of creating a client per fetch path. | 84 requests, 84 valid, 0% errors, 49.02s avg, 59.36s max. | Rejected. Validity held, but latency moved right up against the 60s target. |
+| Concurrency 16 | Test whether a higher queue depth gave better observed hourly capacity. | Set `MAX_CONCURRENCY=16`; kept the shared client and the two-hop Lens/Exact Match flow unchanged. | 48 requests, 48 valid, 0% errors, 28.62s avg, 40.49s max. | Kept. Better throughput signal without sacrificing Exact Match validity. |
+| Low jitter | Remove local waiting that was not buying reliability. | Changed jitter defaults from 0.25-1.5s to `REQUEST_DELAY_MIN_SECONDS=0.0` and `REQUEST_DELAY_MAX_SECONDS=0.25`. | 18 requests, 18 valid, 0% errors, 22.22s avg, 26.48s max. | Kept. This was the cleanest latency win. |
+| Successful-response cache | Avoid spending provider calls on repeated image URLs and collapse duplicate in-flight misses. | Added `ExactMatchResponseCache`, keyed by image URL, with TTL/LRU storage and in-flight task coalescing. Only classified Exact Match HTML is cached. | Covered by deterministic cache tests; live load samples still report uncached first-hit behavior for unique URLs. | Kept. It reduces repeated-corpus cost without caching errors, CAPTCHA pages, or unknown HTML. |
+| Provider resource blocking | MrScraper exposes a resource-blocking hint; since this API returns HTML, blocking images/CSS/fonts looked plausible. | Added `MRSCRAPER_BLOCK_RESOURCES` and passed `blockResources=true` into the MrScraper API URL when enabled. | 18 requests, 18 valid, 0% errors, 49.26s avg, 76.13s max. | Rejected. It preserved validity but made the Lens flow slower. |
+| HTTPX pool tuning | Check whether matching the HTTP pool exactly to the 16-slot limiter improved queueing. | Changed pool limits to `max_connections=16`, `max_keepalive_connections=16`, and a longer keepalive expiry for the trial. | 18 requests, 18 valid, 0% errors, 25.66s avg, 32.29s max. | Rejected. The default `max(MAX_CONCURRENCY * 2, 20)` connection policy was faster. |
+| First-hop early cutoff | Saved Lens fixtures showed the `udm=48` link before the end of the first response, so streaming might avoid reading unnecessary HTML. | Tried streaming the Lens-entry response and stopping once the Exact Match link appeared, then fetching the extracted URL as usual. | 18 requests, 18 valid, 0% errors, 24.88s avg, 31.25s max. | Rejected. The cutoff fired, but the first provider hop had already taken most of the time. |
+| Provider geo override | Test whether forcing US routing improved Google localization or provider scheduling. | Added `geoCode=US` to the MrScraper fetch parameters for the trial. | 18 requests, 6 valid, 66.7% errors, 32.14s avg, 51.65s max. | Rejected immediately. It broke validity. |
 
-## Repository Map
-
-- [`docs/challenge/`](docs/challenge/): challenge PDF and extracted spec.
-- [`docs/RUNBOOK.md`](docs/RUNBOOK.md): common commands and live measurement notes.
-- [`docs/INDEX.md`](docs/INDEX.md): repository file map.
-- [`tests/`](tests/): deterministic coverage for parsing, configuration,
-  classification, provider errors, cache behavior, and harness tooling.
-- [`harness.json`](harness.json): routine local verification steps.
+The most useful surprise was the early-cutoff result. I expected local HTML
+reading to matter because the first Lens page can be large. In live runs, the
+slow part had already happened before the Exact Match link arrived, and the
+second `udm=48` fetch was usually much faster. That pushed the optimization
+work toward concurrency, provider pacing, and avoiding duplicate upstream work
+instead of clever local parsing.
