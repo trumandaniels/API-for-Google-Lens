@@ -59,6 +59,17 @@ direct non-provider Google traffic is not a supported runtime path.
 GET /google-lens?imageUrl=<image_url>
 ```
 
+Optional trusted-evaluator fallback header:
+
+```text
+X-MrScraper-Api-Key: <alternate_mrscraper_token>
+```
+
+When this header is omitted, the service uses the deployed `MRSCRAPER_API_KEY`
+environment variable. The header is intentionally optional and should only be
+shared with trusted evaluators if the deployed token runs out of credits during
+testing.
+
 Success response:
 
 ```text
@@ -79,21 +90,24 @@ Expected failure responses include:
 
 ```mermaid
 flowchart TD
-    Client["API client"] --> Route["GET /google-lens?imageUrl=..."]
-    Route --> Parse["Parse imageUrl into ImageUrl"]
-    Parse --> Service["GoogleLensService"]
-    Service --> Limit["Concurrency limiter"]
-    Limit --> Direct["DirectLensClient"]
-    Direct --> Provider["MrScraper HTML fetch API"]
-    Provider --> Lens["lens.google.com/uploadbyurl"]
-    Lens --> Search["Google Lens / Search udm=26 page"]
-    Search --> Exact["Google Search Exact Match udm=48 page"]
-    Exact --> Classifier["HTML classifier"]
-    Classifier -->|Exact Match HTML| Success["200 text/html raw HTML"]
-    Classifier -->|Malformed input| BadRequest["400"]
-    Classifier -->|CAPTCHA or bot block| Blocked["429"]
-    Classifier -->|Timeout| Timeout["504"]
-    Classifier -->|Google error or unknown page| UpstreamError["502"]
+    Client["API client<br/>Sends a public image URL"] --> Route["FastAPI route<br/>GET /google-lens?imageUrl=...<br/>Optional trusted X-MrScraper-Api-Key fallback"]
+    Route --> Parse["Boundary parse<br/>Trim and parse imageUrl into ImageUrl<br/>Reject empty, relative, or non-http(s) URLs"]
+    Parse -->|parsed URL is now trusted| Service["GoogleLensService<br/>Orchestrates pacing, fetch, classification,<br/>and domain errors for one request"]
+    Service --> Limit["Concurrency limiter<br/>Caps in-process upstream work at MAX_CONCURRENCY<br/>so provider traffic is bounded"]
+    Limit --> Jitter["Request jitter<br/>Sleep random REQUEST_DELAY_MIN_SECONDS<br/>through REQUEST_DELAY_MAX_SECONDS<br/>to avoid synchronized bursts"]
+    Jitter --> Direct["DirectLensClient<br/>Builds the reverse-engineered Lens URL<br/>lens.google.com/uploadbyurl?url=..."]
+    Direct --> ProviderEntry["MrScraper HTML fetch<br/>Provider receives token + html=true + super=true<br/>and performs the Google-facing browser/proxy work"]
+    ProviderEntry --> Lens["Google Lens entry hop<br/>MrScraper fetches lens.google.com/uploadbyurl<br/>Google creates a Lens/Search session for the image"]
+    Lens --> Search["Lens/Search All results<br/>Returned HTML contains the session-specific<br/>Exact Match tab link with udm=48"]
+    Search --> Extract["Extract Exact Match URL<br/>Find the udm=48 tab link in the All-results HTML<br/>because the final URL depends on Google's session"]
+    Extract --> ProviderExact["Second MrScraper HTML fetch<br/>Fetch the extracted Exact Match URL<br/>through the same provider path"]
+    ProviderExact --> Exact["Google Exact Match page<br/>Google Search/Lens HTML with udm=48<br/>should contain actual Exact Match result content"]
+    Exact --> Classifier["HTML classifier<br/>Accept only real Exact Match HTML<br/>Detect CAPTCHA, sorry pages, Google errors, and unknown pages"]
+    Parse -->|malformed imageUrl| BadRequest["400<br/>Bad request before upstream work"]
+    Classifier -->|Exact Match HTML| Success["200 text/html<br/>Return raw Exact Match page HTML"]
+    Classifier -->|CAPTCHA or bot-check HTML| Blocked["429<br/>Do not return bot-block pages as success"]
+    Classifier -->|timeout while fetching upstream| Timeout["504<br/>Provider or Google took too long"]
+    Classifier -->|Google/provider error or unknown page| UpstreamError["502<br/>Upstream did not produce valid Exact Match HTML"]
 ```
 
 ## Project Structure
@@ -294,6 +308,7 @@ input set:
 | Kept low-jitter setting | `MAX_CONCURRENCY=16`, `REQUEST_DELAY_MIN_SECONDS=0`, `REQUEST_DELAY_MAX_SECONDS=0.25`, `MRSCRAPER_BLOCK_RESOURCES=false` | 18 | 18 | 0% | 22.22s | 26.48s | 943 valid/hour | Kept; about 22% lower average latency than the prior kept 16-slot run |
 | Rejected HTTPX pool tuning | `MAX_CONCURRENCY=16`, low jitter, `max_connections=16`, `max_keepalive_connections=16`, `keepalive_expiry=30s` | 18 | 18 | 0% | 25.66s | 32.29s | 657 valid/hour | Rejected; validity stayed perfect, but latency regressed versus the 22.22s low-jitter run |
 | Rejected first-hop early cutoff | `MAX_CONCURRENCY=16`, low jitter, streamed Lens entry body until the `udm=48` Exact Match link appeared | 18 | 18 | 0% | 24.88s | 31.25s | 711 valid/hour | Rejected; correctness stayed perfect and cutoff fired, but latency still regressed versus the 22.22s low-jitter run |
+| Rejected MrScraper geo code | `MAX_CONCURRENCY=16`, low jitter, `geoCode=US` on MrScraper fetches | 18 | 6 | 66.7% | 32.14s | 51.65s | 209 valid/hour | Rejected; validity collapsed with 3 bot blocks and 9 HTTP errors |
 
 The `MAX_CONCURRENCY=8` pressure run stayed under the 60-second latency target,
 but it did not materially improve observed throughput and pushed p95 latency
@@ -328,6 +343,13 @@ the first hop had already taken about 16s-27s by then and average end-to-end
 latency regressed to 24.88s. The implementation was therefore reverted. The
 useful finding is diagnostic: the first MrScraper Lens-entry hop dominates
 latency more than local response-body reading does.
+
+The MrScraper `geoCode=US` experiment tested one of the few public provider
+knobs that might affect first-hop routing or localization. It was rejected
+immediately because it damaged the core challenge criteria: only 6 of 18
+requests returned valid Exact Match HTML, 3 were classified as bot blocks, and
+9 returned HTTP-style failures. The geo-code parameter is therefore not part of
+the runtime contract.
 
 These are local live measurements, not a substitute for the final hosted
 one-hour run. Use the 84-request five-minute estimate before claiming a hosted
@@ -368,6 +390,9 @@ Measured local contributors:
   usually much faster than the Lens entry hop in the sampled run. Optimizing
   local HTML reading is not enough unless the provider can start returning the
   Exact Match link much earlier.
+- The `geoCode=US` run suggests provider geo routing is risky for this Google
+  Lens path: it increased blocks/failures enough to violate the challenge error
+  target, so geo tuning is not a safe latency lever.
 - Concurrency is a throughput and queueing lever, not a pure per-request
   latency lever. The 8-slot run was slower than both the 4-slot baseline and the
   16-slot run, which suggests provider-side scheduling variance matters and
@@ -407,13 +432,79 @@ MrScraper Scraper API / Playground example:
 export MRSCRAPER_API_KEY='atk_example'
 ```
 
+Trusted evaluator fallback using a per-request MrScraper token:
+
+```bash
+curl \
+  -H "X-MrScraper-Api-Key: atk_evaluator_example" \
+  'http://127.0.0.1:8000/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+```
+
 MrScraper's HTML fetch API uses an API token query parameter plus render options
 such as `html=true`, `super=true`, and `url=<target>`. That API-token flow is
 the supported scraping provider for this project. The operational assumption is
 that MrScraper supplies the Google-facing proxy rotation and anti-bot handling;
 this app adds local concurrency limits and randomized request pacing so it does
-not send avoidable bursts into the provider. Do not commit API keys or saved
-live HTML that includes account-specific request metadata.
+not send avoidable bursts into the provider. The optional
+`X-MrScraper-Api-Key` request header overrides the configured token for that
+single API call without changing the public endpoint contract. Do not commit API
+keys or saved live HTML that includes account-specific request metadata.
+
+### Anti-Bot And Bot-Evasion Posture
+
+This implementation keeps bot evasion narrow and explicit. The app does not
+ship a stealth browser, CAPTCHA solver, or local proxy pool. Instead, every live
+Google request is sent through MrScraper's API-token HTML fetch mode, and the
+app treats MrScraper as the Google-facing unblocker layer. In practice that
+means the provider is expected to handle the externally visible browser
+automation, IP/proxy rotation, TLS/browser fingerprinting, cookie/session
+handling, and any browser rotation needed to make Google Lens pages load
+reliably. The FastAPI service is responsible for building the direct
+reverse-engineered Lens URLs, pacing requests into the provider, and rejecting
+bad HTML.
+
+The local anti-bot controls are:
+
+- **Provider-only Google traffic:** the app does not send direct local or
+  datacenter HTTP requests to Google in production. Earlier live probes returned
+  Google `403` pages without the provider, so bypassing MrScraper is both less
+  reliable and weaker for the challenge's "return real Exact Match HTML" goal.
+- **Browser-like request headers:** every MrScraper fetch includes a stable
+  desktop Chrome-style `USER_AGENT`, `accept`, `accept-language`,
+  `sec-fetch-*`, and navigation headers. These headers describe the browser
+  request that MrScraper should make on the app's behalf; they are not a full
+  fingerprinting solution by themselves.
+- **Process-wide concurrency cap:** `MAX_CONCURRENCY` limits how many upstream
+  MrScraper fetch flows can run at once in one API process. The current measured
+  default is `16`, which is intended to keep the service responsive at the
+  evaluator's 16.7 requests/minute pace without creating an unbounded burst
+  against the provider.
+- **Randomized jitter before provider calls:** before a request enters the
+  MrScraper fetch path, the service sleeps for a random duration between
+  `REQUEST_DELAY_MIN_SECONDS` and `REQUEST_DELAY_MAX_SECONDS`. This is jitter:
+  a small random delay that prevents every request from starting at perfectly
+  regular or perfectly simultaneous intervals. The current measured defaults
+  are `0.0` and `0.25`, meaning each request waits somewhere from no delay up to
+  one quarter second before the provider fetch begins. A larger previous range
+  of `0.25` to `1.5` seconds was safer-looking but added avoidable latency; the
+  low-jitter range preserved 18/18 valid responses with 0% errors in the
+  one-minute sample.
+- **Response classification gate:** returned HTML is not trusted just because
+  the upstream request succeeded. The service classifies the body and only
+  returns `200` for pages recognized as real Exact Match results. CAPTCHA,
+  Google sorry pages, bot-check pages, Google error pages, empty bodies, and
+  ambiguous non-Exact-Match pages map to non-2xx API errors instead of being
+  passed through as successful challenge responses.
+- **No speculative provider knobs by default:** `MRSCRAPER_BLOCK_RESOURCES` is
+  available but defaults to `false` because it was slower in live Lens tests.
+  `geoCode=US` was also tested and rejected because it increased failures. The
+  default configuration keeps only the provider options that have preserved
+  Exact Match validity in measured runs.
+
+The distinction matters for review: MrScraper owns rotation of the externally
+visible browser/proxy identity; this repository owns deterministic request
+construction, local pacing, concurrency control, error classification, and
+public evidence that the chosen settings work.
 
 Note: `MAX_CONCURRENCY` is enforced per running API process. Multi-process
 deployments need either one worker per instance or a shared limiter such as

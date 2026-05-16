@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.lens.direct import DirectLensClient
-from app.models import ImageUrl
+from app.models import ImageUrl, ProviderApiToken
 
 
 class DirectLensClientTests(unittest.TestCase):
@@ -74,6 +74,27 @@ class DirectLensClientTests(unittest.TestCase):
         self.assertNotIn("blockResources", query)
         self.assertEqual(query["url"], [target_url])
         self.assertEqual(query["token"], ["atk_example"])
+
+    def test_can_override_mrscraper_token_per_request(self) -> None:
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_configured",
+            mrscraper_api_url="https://api.mrscraper.com",
+        )
+        override = ProviderApiToken.parse_optional(" atk_request ")
+        assert override is not None
+
+        headers = client.build_request_headers(override)
+        request_url = client.build_mrscraper_api_url(
+            "https://lens.google.com/uploadbyurl?url=x",
+            override,
+        )
+        query = parse_qs(urlparse(request_url).query)
+
+        self.assertEqual(headers["x-api-token"], "atk_request")
+        self.assertEqual(query["token"], ["atk_request"])
 
     def test_can_enable_mrscraper_resource_blocking(self) -> None:
         client = DirectLensClient(

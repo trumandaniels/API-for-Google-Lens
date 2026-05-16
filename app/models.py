@@ -48,6 +48,34 @@ class ImageUrl:
 
 
 @dataclass(frozen=True)
+class ProviderApiToken:
+    """Parsed per-request scraping-provider API token.
+
+    Attributes:
+        value: Stripped provider token supplied by a trusted API caller.
+    """
+
+    value: str
+
+    @classmethod
+    def parse_optional(cls, raw_value: str | None) -> "ProviderApiToken | None":
+        """Parse an optional provider token override.
+
+        Args:
+            raw_value: Optional token header value from the HTTP request.
+
+        Returns:
+            Parsed token when a non-empty value is supplied; otherwise `None`.
+        """
+        if raw_value is None:
+            return None
+        value = raw_value.strip()
+        if not value:
+            return None
+        return cls(value=value)
+
+
+@dataclass(frozen=True)
 class ExactMatchHtml:
     """Successful Google Lens Exact Match response.
 
@@ -58,4 +86,3 @@ class ExactMatchHtml:
 
     html: str
     source_url: str
-

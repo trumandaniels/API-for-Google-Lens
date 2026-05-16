@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from app.errors import UpstreamRequestError, UpstreamTimeoutError
-from app.models import ImageUrl
+from app.models import ImageUrl, ProviderApiToken
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -58,14 +58,37 @@ class DirectLensClient:
     block_resources: bool = False
     http_client: Any | None = None
 
-    def build_request_headers(self) -> dict[str, str]:
+    def resolve_mrscraper_api_key(self, token_override: ProviderApiToken | None = None) -> str:
+        """Return the provider token to use for one upstream fetch.
+
+        Args:
+            token_override: Optional per-request provider token supplied by the
+                API caller.
+
+        Returns:
+            The caller-supplied token when present, otherwise the configured
+            process token.
+        """
+        if token_override is not None:
+            return token_override.value
+        return self.mrscraper_api_key
+
+    def build_request_headers(
+        self,
+        token_override: ProviderApiToken | None = None,
+    ) -> dict[str, str]:
         """Build stable headers for MrScraper-backed Google page fetches.
+
+        Args:
+            token_override: Optional per-request provider token supplied by the
+                API caller.
 
         Returns:
             Browser-like request headers. The API token is included both in the
             MrScraper query string and the provider token header accepted by
             the service.
         """
+        api_key = self.resolve_mrscraper_api_key(token_override)
         return {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "en-US,en;q=0.9",
@@ -77,7 +100,7 @@ class DirectLensClient:
             "sec-fetch-user": "?1",
             "upgrade-insecure-requests": "1",
             "user-agent": self.user_agent,
-            "x-api-token": self.mrscraper_api_key,
+            "x-api-token": api_key,
         }
 
     async def aclose(self) -> None:
@@ -161,11 +184,17 @@ class DirectLensClient:
             return None
         return urljoin("https://www.google.com", unescape(match.group("href")))
 
-    def build_mrscraper_api_url(self, target_url: str) -> str:
+    def build_mrscraper_api_url(
+        self,
+        target_url: str,
+        token_override: ProviderApiToken | None = None,
+    ) -> str:
         """Build a MrScraper API request URL for a target page.
 
         Args:
             target_url: Fully formed target URL that MrScraper should fetch.
+            token_override: Optional per-request provider token supplied by the
+                API caller.
 
         Returns:
             MrScraper HTML fetch request URL.
@@ -174,10 +203,11 @@ class DirectLensClient:
             ValueError: If this client was not configured with a MrScraper API
                 key.
         """
-        if not self.mrscraper_api_key:
+        api_key = self.resolve_mrscraper_api_key(token_override)
+        if not api_key:
             raise ValueError("mrscraper_api_key is required")
         query_params = {
-            "token": self.mrscraper_api_key,
+            "token": api_key,
             "html": "true",
             "super": "true",
             "url": target_url,
@@ -187,11 +217,17 @@ class DirectLensClient:
         query = urlencode(query_params)
         return f"{self.mrscraper_api_url}?{query}"
 
-    async def fetch_exact_match_html(self, image_url: ImageUrl) -> DirectLensResponse:
+    async def fetch_exact_match_html(
+        self,
+        image_url: ImageUrl,
+        token_override: ProviderApiToken | None = None,
+    ) -> DirectLensResponse:
         """Fetch raw upstream HTML for the direct Exact Match path.
 
         Args:
             image_url: Parsed image URL to submit upstream.
+            token_override: Optional per-request provider token supplied by the
+                API caller.
 
         Returns:
             Raw upstream response details.
@@ -202,10 +238,10 @@ class DirectLensClient:
         """
         import httpx
 
-        headers = self.build_request_headers()
+        headers = self.build_request_headers(token_override)
         upstream_url = self.build_exact_match_url(image_url)
         final_url = upstream_url
-        request_url = self.build_mrscraper_api_url(upstream_url)
+        request_url = self.build_mrscraper_api_url(upstream_url, token_override)
 
         timeout = httpx.Timeout(self.timeout_seconds)
 
@@ -245,7 +281,7 @@ class DirectLensClient:
         if exact_url is not None:
             final_url = exact_url
             response = await get(
-                self.build_mrscraper_api_url(exact_url),
+                self.build_mrscraper_api_url(exact_url, token_override),
                 headers,
                 "exact_match",
             )

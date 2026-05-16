@@ -11,7 +11,7 @@ from app.config import parse_settings
 from app.lens.direct import DirectLensResponse
 from app.lens.service import GoogleLensService
 from app.main import build_lens_service, create_app
-from app.models import ImageUrl
+from app.models import ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
 
 
@@ -29,14 +29,20 @@ class CountingLensClient:
         self.active_calls = 0
         self.max_active_calls = 0
         self.call_count = 0
+        self.last_token_override: ProviderApiToken | None = None
         self._lock = threading.Lock()
 
-    async def fetch_exact_match_html(self, image_url: ImageUrl) -> DirectLensResponse:
+    async def fetch_exact_match_html(
+        self,
+        image_url: ImageUrl,
+        token_override: ProviderApiToken | None = None,
+    ) -> DirectLensResponse:
         """Return exact-match HTML after a short overlap window."""
         with self._lock:
             self.call_count += 1
             self.active_calls += 1
             self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            self.last_token_override = token_override
 
         await asyncio.sleep(0.05)
 
@@ -107,6 +113,35 @@ class ApiLifecycleTests(unittest.TestCase):
         self.assertEqual(statuses, [200, 200])
         self.assertEqual(counting_client.call_count, 2)
         self.assertEqual(counting_client.max_active_calls, 1)
+
+    def test_route_accepts_optional_mrscraper_token_override_header(self) -> None:
+        settings = parse_settings(
+            {
+                "MRSCRAPER_API_KEY": "atk_configured",
+                "REQUEST_DELAY_MIN_SECONDS": "0",
+                "REQUEST_DELAY_MAX_SECONDS": "0",
+            }
+        )
+        app = create_app(settings=settings)
+        counting_client = CountingLensClient()
+
+        with TestClient(app) as client:
+            app.state.lens_service = GoogleLensService(
+                client=counting_client,  # type: ignore[arg-type]
+                limiter=AsyncConcurrencyLimiter(settings.max_concurrency),
+                request_delay_min_seconds=0,
+                request_delay_max_seconds=0,
+            )
+            response = client.get(
+                "/google-lens",
+                params={"imageUrl": "https://example.com/image.jpg"},
+                headers={"X-MrScraper-Api-Key": " atk_request "},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(counting_client.last_token_override)
+        assert counting_client.last_token_override is not None
+        self.assertEqual(counting_client.last_token_override.value, "atk_request")
 
 
 if __name__ == "__main__":

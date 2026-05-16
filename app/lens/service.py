@@ -10,7 +10,7 @@ from app.config import Settings
 from app.errors import BotBlockError, ExactMatchNotFoundError, GoogleErrorPageError, UpstreamRequestError
 from app.lens.classifier import HtmlVerdict, classify_google_html
 from app.lens.direct import DirectLensClient
-from app.models import ExactMatchHtml, ImageUrl
+from app.models import ExactMatchHtml, ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
 
 
@@ -86,11 +86,17 @@ class GoogleLensService:
         if close is not None:
             await close()
 
-    async def fetch_exact_match_html(self, image_url: ImageUrl) -> ExactMatchHtml:
+    async def fetch_exact_match_html(
+        self,
+        image_url: ImageUrl,
+        token_override: ProviderApiToken | None = None,
+    ) -> ExactMatchHtml:
         """Fetch and classify Exact Match HTML for an image URL.
 
         Args:
             image_url: Parsed image URL from the API boundary.
+            token_override: Optional per-request provider token supplied by the
+                API caller.
 
         Returns:
             Raw Exact Match HTML and source URL.
@@ -104,7 +110,7 @@ class GoogleLensService:
         """
         async with self.limiter.slot():
             await self.wait_before_upstream_request()
-            response = await self.client.fetch_exact_match_html(image_url)
+            response = await self.client.fetch_exact_match_html(image_url, token_override)
 
         if response.status_code >= 500:
             raise UpstreamRequestError("Google returned a server error")
