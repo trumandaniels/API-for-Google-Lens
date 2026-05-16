@@ -10,12 +10,14 @@ from functools import lru_cache
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 DEFAULT_GOOGLE_BASE_URL = "https://lens.google.com/uploadbyurl"
 DEFAULT_MRSCRAPER_API_URL = "https://api.mrscraper.com"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENCY = 4
+DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.25
+DEFAULT_REQUEST_DELAY_MAX_SECONDS = 1.5
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -30,6 +32,8 @@ class Settings(BaseModel):
             MrScraper for fetching.
         request_timeout_seconds: Upstream request timeout in seconds.
         max_concurrency: Maximum in-process concurrent upstream requests.
+        request_delay_min_seconds: Minimum randomized delay before upstream requests.
+        request_delay_max_seconds: Maximum randomized delay before upstream requests.
         user_agent: User agent sent to Google.
         mrscraper_api_key: Required MrScraper Scraper API token.
         mrscraper_api_url: MrScraper Scraper API endpoint.
@@ -38,6 +42,8 @@ class Settings(BaseModel):
     google_base_url: str = Field(default=DEFAULT_GOOGLE_BASE_URL)
     request_timeout_seconds: float = Field(default=DEFAULT_REQUEST_TIMEOUT_SECONDS, gt=0)
     max_concurrency: int = Field(default=DEFAULT_MAX_CONCURRENCY, gt=0)
+    request_delay_min_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MIN_SECONDS, ge=0)
+    request_delay_max_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MAX_SECONDS, ge=0)
     user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
     mrscraper_api_key: str
     mrscraper_api_url: str = Field(default=DEFAULT_MRSCRAPER_API_URL)
@@ -98,6 +104,23 @@ class Settings(BaseModel):
             raise ValueError("mrscraper_api_url must be an HTTPS URL")
         return stripped.rstrip("?")
 
+    @model_validator(mode="after")
+    def require_valid_delay_range(self) -> "Settings":
+        """Ensure randomized request delay settings form a valid range.
+
+        Returns:
+            Parsed settings.
+
+        Raises:
+            ValueError: If the maximum delay is lower than the minimum delay.
+        """
+        if self.request_delay_max_seconds < self.request_delay_min_seconds:
+            raise ValueError(
+                "REQUEST_DELAY_MAX_SECONDS must be greater than or equal to "
+                "REQUEST_DELAY_MIN_SECONDS"
+            )
+        return self
+
 
 def parse_settings(environ: dict[str, str]) -> Settings:
     """Parse settings from an environment mapping.
@@ -123,6 +146,14 @@ def parse_settings(environ: dict[str, str]) -> Settings:
             str(DEFAULT_REQUEST_TIMEOUT_SECONDS),
         ),
         max_concurrency=environ.get("MAX_CONCURRENCY", str(DEFAULT_MAX_CONCURRENCY)),
+        request_delay_min_seconds=environ.get(
+            "REQUEST_DELAY_MIN_SECONDS",
+            str(DEFAULT_REQUEST_DELAY_MIN_SECONDS),
+        ),
+        request_delay_max_seconds=environ.get(
+            "REQUEST_DELAY_MAX_SECONDS",
+            str(DEFAULT_REQUEST_DELAY_MAX_SECONDS),
+        ),
         user_agent=environ.get("USER_AGENT", DEFAULT_USER_AGENT),
     )
 

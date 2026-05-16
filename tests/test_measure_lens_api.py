@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODULE_PATH = REPO_ROOT / "scripts" / "measure_lens_api.py"
+MODULE_SPEC = importlib.util.spec_from_file_location("measure_lens_api", MODULE_PATH)
+if MODULE_SPEC is None or MODULE_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load module from {MODULE_PATH}")
+measure_lens_api = importlib.util.module_from_spec(MODULE_SPEC)
+sys.modules[MODULE_SPEC.name] = measure_lens_api
+MODULE_SPEC.loader.exec_module(measure_lens_api)
+
+
+class MeasureLensApiTests(unittest.TestCase):
+    def test_classifies_exact_match_response_as_valid(self) -> None:
+        verdict, html_verdict = measure_lens_api.classify_response(
+            200,
+            (
+                '<div aria-current="page" selected="" class="mXwfNd">'
+                '<span class="R1QWuf">Exact matches</span></div>'
+            ),
+            "http://127.0.0.1:8000/google-lens",
+        )
+
+        self.assertEqual(verdict, "valid_exact_match")
+        self.assertEqual(html_verdict, "exact_match")
+
+    def test_classifies_non_exact_success_as_invalid_2xx(self) -> None:
+        verdict, html_verdict = measure_lens_api.classify_response(
+            200,
+            "<html><body>Search Results</body></html>",
+            "http://127.0.0.1:8000/google-lens",
+        )
+
+        self.assertEqual(verdict, "invalid_2xx")
+        self.assertEqual(html_verdict, "unknown")
+
+    def test_summarizes_metrics_and_threshold_checks(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=0,
+                image_url_hash="a",
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+            ),
+            measure_lens_api.MeasurementResult(
+                index=1,
+                image_url_hash="b",
+                status_code=502,
+                latency_seconds=3.0,
+                verdict="http_error",
+                html_verdict="unknown",
+            ),
+            measure_lens_api.MeasurementResult(
+                index=2,
+                image_url_hash="c",
+                status_code=200,
+                latency_seconds=2.0,
+                verdict="invalid_2xx",
+                html_verdict="unknown",
+            ),
+        ]
+        thresholds = measure_lens_api.Thresholds(
+            min_valid_exact=1,
+            max_average_latency_seconds=2.1,
+            max_error_rate=0.34,
+        )
+
+        summary = measure_lens_api.summarize_results(results, thresholds)
+
+        self.assertTrue(summary["passed"])
+        self.assertEqual(summary["metrics"]["totalRequests"], 3)
+        self.assertEqual(summary["metrics"]["validExactMatchCount"], 1)
+        self.assertEqual(summary["metrics"]["invalid2xxCount"], 1)
+        self.assertAlmostEqual(summary["metrics"]["averageLatencySeconds"], 2.0)
+        self.assertAlmostEqual(summary["metrics"]["errorRate"], 1 / 3)
+
+    def test_threshold_failure_is_reported(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=0,
+                image_url_hash="a",
+                status_code=502,
+                latency_seconds=61.0,
+                verdict="http_error",
+                html_verdict="unknown",
+            )
+        ]
+        thresholds = measure_lens_api.Thresholds(
+            min_valid_exact=1,
+            max_average_latency_seconds=60.0,
+            max_error_rate=0.10,
+        )
+
+        summary = measure_lens_api.summarize_results(results, thresholds)
+
+        self.assertFalse(summary["passed"])
+        self.assertFalse(summary["checks"]["validExactMatchCount"])
+        self.assertFalse(summary["checks"]["averageLatencySeconds"])
+        self.assertFalse(summary["checks"]["errorRate"])
+
+
+if __name__ == "__main__":
+    unittest.main()

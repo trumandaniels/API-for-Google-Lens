@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+import random
 
 from app.config import Settings
 from app.errors import BotBlockError, ExactMatchNotFoundError, GoogleErrorPageError, UpstreamRequestError
@@ -19,10 +21,14 @@ class GoogleLensService:
     Args:
         client: Direct Google request client.
         limiter: Concurrency limiter for upstream calls.
+        request_delay_min_seconds: Minimum randomized delay before provider calls.
+        request_delay_max_seconds: Maximum randomized delay before provider calls.
     """
 
     client: DirectLensClient
     limiter: AsyncConcurrencyLimiter
+    request_delay_min_seconds: float = 0.0
+    request_delay_max_seconds: float = 0.0
 
     @classmethod
     def from_settings(
@@ -46,7 +52,28 @@ class GoogleLensService:
             timeout_seconds=settings.request_timeout_seconds,
             user_agent=settings.user_agent,
         )
-        return cls(client=client, limiter=limiter)
+        return cls(
+            client=client,
+            limiter=limiter,
+            request_delay_min_seconds=settings.request_delay_min_seconds,
+            request_delay_max_seconds=settings.request_delay_max_seconds,
+        )
+
+    async def wait_before_upstream_request(self) -> None:
+        """Apply local randomized pacing before sending a provider request.
+
+        The provider-side rotation layer is still responsible for Google-facing
+        anti-bot behavior. This local delay reduces avoidable burstiness from
+        the API process itself.
+        """
+        if self.request_delay_max_seconds <= 0:
+            return
+        delay = random.uniform(
+            self.request_delay_min_seconds,
+            self.request_delay_max_seconds,
+        )
+        if delay > 0:
+            await asyncio.sleep(delay)
 
     async def fetch_exact_match_html(self, image_url: ImageUrl) -> ExactMatchHtml:
         """Fetch and classify Exact Match HTML for an image URL.
@@ -65,6 +92,7 @@ class GoogleLensService:
                 Match HTML.
         """
         async with self.limiter.slot():
+            await self.wait_before_upstream_request()
             response = await self.client.fetch_exact_match_html(image_url)
 
         if response.status_code >= 500:

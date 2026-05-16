@@ -2,29 +2,26 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from app.config import Settings, get_settings
 from app.errors import LensApiError, to_http_error
 from app.lens.service import GoogleLensService
 from app.models import ImageUrl
-from app.throttling import AsyncConcurrencyLimiter
 
 router = APIRouter()
 
 
-def get_lens_service(settings: Settings = Depends(get_settings)) -> GoogleLensService:
-    """Build a Google Lens service for request handling.
+def get_lens_service(request: Request) -> GoogleLensService:
+    """Return the process-scoped Google Lens service.
 
     Args:
-        settings: Parsed application settings.
+        request: Current FastAPI request.
 
     Returns:
-        Service configured with request timeout and concurrency limits.
+        Shared service configured during application startup.
     """
-    limiter = AsyncConcurrencyLimiter(settings.max_concurrency)
-    return GoogleLensService.from_settings(settings=settings, limiter=limiter)
+    return request.app.state.lens_service
 
 
 @router.get("/healthz")

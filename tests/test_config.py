@@ -13,6 +13,7 @@ class SettingsParsingTests(unittest.TestCase):
 
         self.assertEqual(settings.mrscraper_api_key, "atk_example")
         self.assertEqual(settings.mrscraper_api_url, "https://api.mrscraper.com")
+        self.assertGreater(settings.request_delay_max_seconds, 0)
 
     def test_requires_mrscraper_api_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "MRSCRAPER_API_KEY"):
@@ -24,6 +25,16 @@ class SettingsParsingTests(unittest.TestCase):
                 {
                     "MRSCRAPER_API_KEY": "atk_example",
                     "MRSCRAPER_API_URL": "http://api.mrscraper.com",
+                }
+            )
+
+    def test_rejects_invalid_delay_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "REQUEST_DELAY_MAX_SECONDS"):
+            parse_settings(
+                {
+                    "MRSCRAPER_API_KEY": "atk_example",
+                    "REQUEST_DELAY_MIN_SECONDS": "2.0",
+                    "REQUEST_DELAY_MAX_SECONDS": "1.0",
                 }
             )
 

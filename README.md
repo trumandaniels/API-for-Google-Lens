@@ -16,6 +16,7 @@ page.
 - [Setup](#setup)
 - [Run](#run)
 - [Test](#test)
+- [Measure](#measure)
 - [Provider Configuration](#provider-configuration)
 - [Approach](#approach)
 
@@ -31,8 +32,8 @@ Google Lens requests. The verified flow submits a minimal Lens `uploadbyurl`
 request through MrScraper, receives the Google Search Lens page, follows the
 Exact Match `udm=48` tab link through MrScraper, and returns the raw Exact Match
 HTML. Plain local or datacenter HTTP clients have returned Google `403` pages
-during live probes, so direct non-provider Google traffic is not a supported
-runtime path.
+during live probes, and Google will rate-limit unrotated scraping traffic, so
+direct non-provider Google traffic is not a supported runtime path.
 
 ## Endpoint
 
@@ -162,6 +163,43 @@ Syntax-check the app and tests:
 python3 -m compileall -q app tests
 ```
 
+## Measure
+
+Use `scripts/measure_lens_api.py` against a running local or hosted API to
+produce latency, validity, and error-rate evidence. The script writes
+`report.json`, `verdict.json`, `samples.jsonl`, and `report.md` under
+`.runtime/runs/lens-measure-...`.
+
+Small smoke measurement:
+
+```bash
+python3 scripts/measure_lens_api.py \
+  --base-url http://127.0.0.1:8000 \
+  --image-url 'https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG' \
+  --requests 5 \
+  --concurrency 2 \
+  --min-valid-exact 1 \
+  --max-average-latency-seconds 60 \
+  --max-error-rate 0.5
+```
+
+Challenge-style evidence run:
+
+```bash
+python3 scripts/measure_lens_api.py \
+  --base-url https://your-host.example \
+  --image-url-file .runtime/live-image-urls.txt \
+  --requests 1000 \
+  --concurrency 4 \
+  --rate-per-minute 16.7 \
+  --target challenge
+```
+
+`--target challenge` checks the scoring targets currently tracked in the local
+spec: at least 300 valid Exact Match HTML responses, average latency at or below
+60 seconds, and error rate at or below 10%. Image URLs are recorded only as
+short hashes in measurement artifacts.
+
 ## Provider Configuration
 
 The API reads these environment variables:
@@ -169,7 +207,12 @@ The API reads these environment variables:
 - `GOOGLE_BASE_URL`: upstream Google Lens base URL. Defaults to
   `https://lens.google.com/uploadbyurl`.
 - `REQUEST_TIMEOUT_SECONDS`: upstream timeout. Defaults to `30.0`.
-- `MAX_CONCURRENCY`: intended upstream concurrency limit. Defaults to `4`.
+- `MAX_CONCURRENCY`: process-wide upstream concurrency limit for this API
+  process. Defaults to `4`.
+- `REQUEST_DELAY_MIN_SECONDS`: minimum randomized local delay before each
+  provider request. Defaults to `0.25`.
+- `REQUEST_DELAY_MAX_SECONDS`: maximum randomized local delay before each
+  provider request. Defaults to `1.5`.
 - `USER_AGENT`: user agent sent upstream.
 - `MRSCRAPER_API_KEY`: required MrScraper Scraper API token. The app asks
   MrScraper's HTML fetch endpoint to fetch each Google Lens / Search URL with
@@ -190,12 +233,15 @@ export MRSCRAPER_API_KEY='atk_example'
 
 MrScraper's HTML fetch API uses an API token query parameter plus render options
 such as `html=true`, `super=true`, and `url=<target>`. That API-token flow is
-the supported scraping provider for this project. Do not commit API keys or
-saved live HTML that includes account-specific request metadata.
+the supported scraping provider for this project. The operational assumption is
+that MrScraper supplies the Google-facing proxy rotation and anti-bot handling;
+this app adds local concurrency limits and randomized request pacing so it does
+not send avoidable bursts into the provider. Do not commit API keys or saved
+live HTML that includes account-specific request metadata.
 
-Note: process-wide concurrency enforcement still needs to be completed. The
-current scaffold includes the limiter type, but request lifetime management must
-be tightened before claiming a hosted max concurrency.
+Note: `MAX_CONCURRENCY` is enforced per running API process. Multi-process
+deployments need either one worker per instance or a shared limiter such as
+Redis before claiming a cross-worker concurrency limit.
 
 ## Approach
 
