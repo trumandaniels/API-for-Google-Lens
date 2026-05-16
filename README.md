@@ -17,7 +17,7 @@ page.
 - [Run](#run)
 - [Test](#test)
 - [Measure](#measure)
-- [Optimization Evidence](#optimization-evidence)
+- [Optimization Experiments](#optimization-experiments)
 - [Latency Diagnosis](#latency-diagnosis)
 - [Provider Configuration](#provider-configuration)
 - [Approach](#approach)
@@ -240,12 +240,21 @@ short hashes in measurement artifacts. Use this full run as final evidence
 before submission or when claiming a hosted max concurrency, not as the default
 iteration loop.
 
-## Optimization Evidence
+## Optimization Experiments
 
 The runtime keeps the direct reverse-engineered approach required by the
 challenge: each request still goes through MrScraper API-token mode, reaches the
 Google Lens Search page, follows the Exact Match `udm=48` tab, classifies the
 HTML, and returns only actual Exact Match content.
+
+Latency work is handled as controlled experiments rather than speculative
+tuning. Each candidate change is tested against the same public API behavior:
+valid Exact Match HTML must still be returned as `200`, CAPTCHA/bot/error pages
+must still be rejected, the one-process concurrency model must remain explicit,
+and any measured result must be recorded here whether it was kept or rejected.
+Because MrScraper credits are limited, routine screening uses small 18-request
+one-minute live samples at the challenge arrival pace before spending credits on
+the 84-request five-minute estimate or a full 1,000-request challenge run.
 
 Two measured latency optimizations and one diagnostic hardening change are
 currently kept:
@@ -284,6 +293,7 @@ input set:
 | Rejected provider resource blocking | `MAX_CONCURRENCY=4` from local `.env`, `MRSCRAPER_BLOCK_RESOURCES=true` | 18 | 18 | 0% | 49.26s | 76.13s | 472 valid/hour | Rejected; MrScraper's resource-blocking hint was slower for this Lens flow |
 | Kept low-jitter setting | `MAX_CONCURRENCY=16`, `REQUEST_DELAY_MIN_SECONDS=0`, `REQUEST_DELAY_MAX_SECONDS=0.25`, `MRSCRAPER_BLOCK_RESOURCES=false` | 18 | 18 | 0% | 22.22s | 26.48s | 943 valid/hour | Kept; about 22% lower average latency than the prior kept 16-slot run |
 | Rejected HTTPX pool tuning | `MAX_CONCURRENCY=16`, low jitter, `max_connections=16`, `max_keepalive_connections=16`, `keepalive_expiry=30s` | 18 | 18 | 0% | 25.66s | 32.29s | 657 valid/hour | Rejected; validity stayed perfect, but latency regressed versus the 22.22s low-jitter run |
+| Rejected first-hop early cutoff | `MAX_CONCURRENCY=16`, low jitter, streamed Lens entry body until the `udm=48` Exact Match link appeared | 18 | 18 | 0% | 24.88s | 31.25s | 711 valid/hour | Rejected; correctness stayed perfect and cutoff fired, but latency still regressed versus the 22.22s low-jitter run |
 
 The `MAX_CONCURRENCY=8` pressure run stayed under the 60-second latency target,
 but it did not materially improve observed throughput and pushed p95 latency
@@ -308,6 +318,16 @@ matched the 16-slot upstream limiter exactly and extended keepalive expiry to
 so the default pool behavior remains the earlier measured setting:
 `max_connections=max(MAX_CONCURRENCY * 2, 20)` and
 `max_keepalive_connections=max(MAX_CONCURRENCY, 10)`.
+
+The first-hop early-cutoff experiment tested whether the API could stream the
+Google Lens entry response and stop reading as soon as the Exact Match
+`udm=48` tab URL appeared. This was plausible because saved Lens fixtures place
+the `udm=48` marker around one-third of the HTML body. In the live run, cutoff
+did fire, usually after reading roughly 350KB-630KB of the first response, but
+the first hop had already taken about 16s-27s by then and average end-to-end
+latency regressed to 24.88s. The implementation was therefore reverted. The
+useful finding is diagnostic: the first MrScraper Lens-entry hop dominates
+latency more than local response-body reading does.
 
 These are local live measurements, not a substitute for the final hosted
 one-hour run. Use the 84-request five-minute estimate before claiming a hosted
@@ -344,6 +364,10 @@ Measured local contributors:
 - Provider-hop logs now show whether slow requests are spending time in the
   Lens entry hop or the Exact Match hop. This is the next useful diagnostic
   before spending another 84-request five-minute estimate.
+- The first-hop early-cutoff experiment confirmed that the Exact Match hop is
+  usually much faster than the Lens entry hop in the sampled run. Optimizing
+  local HTML reading is not enough unless the provider can start returning the
+  Exact Match link much earlier.
 - Concurrency is a throughput and queueing lever, not a pure per-request
   latency lever. The 8-slot run was slower than both the 4-slot baseline and the
   16-slot run, which suggests provider-side scheduling variance matters and
