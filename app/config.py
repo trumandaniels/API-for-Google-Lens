@@ -16,8 +16,9 @@ DEFAULT_GOOGLE_BASE_URL = "https://lens.google.com/uploadbyurl"
 DEFAULT_MRSCRAPER_API_URL = "https://api.mrscraper.com"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENCY = 16
-DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.25
-DEFAULT_REQUEST_DELAY_MAX_SECONDS = 1.5
+DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.0
+DEFAULT_REQUEST_DELAY_MAX_SECONDS = 0.25
+DEFAULT_MRSCRAPER_BLOCK_RESOURCES = False
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -37,6 +38,9 @@ class Settings(BaseModel):
         user_agent: User agent sent to Google.
         mrscraper_api_key: Required MrScraper Scraper API token.
         mrscraper_api_url: MrScraper Scraper API endpoint.
+        mrscraper_block_resources: Optional provider hint to block images,
+            CSS, and fonts while rendering upstream HTML. Disabled by default
+            because the measured Lens path was slower with it enabled.
     """
 
     google_base_url: str = Field(default=DEFAULT_GOOGLE_BASE_URL)
@@ -47,6 +51,7 @@ class Settings(BaseModel):
     user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
     mrscraper_api_key: str
     mrscraper_api_url: str = Field(default=DEFAULT_MRSCRAPER_API_URL)
+    mrscraper_block_resources: bool = Field(default=DEFAULT_MRSCRAPER_BLOCK_RESOURCES)
 
     @field_validator("google_base_url")
     @classmethod
@@ -155,6 +160,10 @@ def parse_settings(environ: dict[str, str]) -> Settings:
             str(DEFAULT_REQUEST_DELAY_MAX_SECONDS),
         ),
         user_agent=environ.get("USER_AGENT", DEFAULT_USER_AGENT),
+        mrscraper_block_resources=environ.get(
+            "MRSCRAPER_BLOCK_RESOURCES",
+            str(DEFAULT_MRSCRAPER_BLOCK_RESOURCES),
+        ),
     )
 
 

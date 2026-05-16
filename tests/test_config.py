@@ -14,6 +14,7 @@ class SettingsParsingTests(unittest.TestCase):
         self.assertEqual(settings.mrscraper_api_key, "atk_example")
         self.assertEqual(settings.mrscraper_api_url, "https://api.mrscraper.com")
         self.assertGreater(settings.request_delay_max_seconds, 0)
+        self.assertFalse(settings.mrscraper_block_resources)
 
     def test_requires_mrscraper_api_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "MRSCRAPER_API_KEY"):

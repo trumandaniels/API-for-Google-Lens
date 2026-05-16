@@ -54,6 +54,7 @@ class GoogleLensService:
             mrscraper_api_url=settings.mrscraper_api_url,
             timeout_seconds=settings.request_timeout_seconds,
             user_agent=settings.user_agent,
+            block_resources=settings.mrscraper_block_resources,
             http_client=http_client,
         )
         return cls(

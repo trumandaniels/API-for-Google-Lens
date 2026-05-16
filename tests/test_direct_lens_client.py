@@ -71,8 +71,25 @@ class DirectLensClientTests(unittest.TestCase):
         self.assertEqual(parsed.netloc, "api.mrscraper.com")
         self.assertEqual(query["html"], ["true"])
         self.assertEqual(query["super"], ["true"])
+        self.assertNotIn("blockResources", query)
         self.assertEqual(query["url"], [target_url])
         self.assertEqual(query["token"], ["atk_example"])
+
+    def test_can_enable_mrscraper_resource_blocking(self) -> None:
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_example",
+            block_resources=True,
+        )
+
+        request_url = client.build_mrscraper_api_url(
+            "https://lens.google.com/uploadbyurl?url=https%3A%2F%2Fexample.com%2Fimage.jpg"
+        )
+        query = parse_qs(urlparse(request_url).query)
+
+        self.assertEqual(query["blockResources"], ["true"])
 
     def test_finds_exact_match_tab_url_in_lens_search_fixture(self) -> None:
         client = DirectLensClient(

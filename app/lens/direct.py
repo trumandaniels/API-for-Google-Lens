@@ -42,6 +42,8 @@ class DirectLensClient:
         mrscraper_api_url: MrScraper Scraper API endpoint.
         timeout_seconds: Per-request timeout.
         user_agent: User agent header.
+        block_resources: Optional provider hint to block images, CSS, and
+            fonts while rendering the target page.
     """
 
     google_base_url: str
@@ -49,6 +51,7 @@ class DirectLensClient:
     user_agent: str
     mrscraper_api_key: str
     mrscraper_api_url: str = "https://api.mrscraper.com"
+    block_resources: bool = False
     http_client: Any | None = None
 
     def build_request_headers(self) -> dict[str, str]:
@@ -169,14 +172,15 @@ class DirectLensClient:
         """
         if not self.mrscraper_api_key:
             raise ValueError("mrscraper_api_key is required")
-        query = urlencode(
-            {
-                "token": self.mrscraper_api_key,
-                "html": "true",
-                "super": "true",
-                "url": target_url,
-            }
-        )
+        query_params = {
+            "token": self.mrscraper_api_key,
+            "html": "true",
+            "super": "true",
+            "url": target_url,
+        }
+        if self.block_resources:
+            query_params["blockResources"] = "true"
+        query = urlencode(query_params)
         return f"{self.mrscraper_api_url}?{query}"
 
     async def fetch_exact_match_html(self, image_url: ImageUrl) -> DirectLensResponse:

@@ -18,12 +18,29 @@ page.
 - [Test](#test)
 - [Measure](#measure)
 - [Optimization Evidence](#optimization-evidence)
+- [Latency Diagnosis](#latency-diagnosis)
 - [Provider Configuration](#provider-configuration)
 - [Approach](#approach)
 
 ## Status
 
-The project currently has the FastAPI scaffold, typed request parsing, error
+The repository is ready for code review and local evaluation. Final challenge
+submission still needs a hosted API URL and a hosted one-hour or agreed remote
+test run before claiming production scoring results.
+
+At a glance:
+
+| Challenge requirement | Current coverage |
+| --- | --- |
+| `GET /google-lens?imageUrl=...` | Implemented with typed query parsing. |
+| Return raw Exact Match HTML | Implemented; non-Exact-Match pages are rejected. |
+| Reverse-engineered/direct request bonus | Implemented through Google Lens/Search URLs fetched by MrScraper API-token mode. |
+| Anti-bot strategy | MrScraper provider-side Google-facing rotation plus local browser headers, jitter, and concurrency limiting. |
+| Meaningful errors | `400`, `429`, `502`, and `504` are mapped explicitly. |
+| Local setup, run, and tests | Documented below; harness and unit suite pass locally. |
+| 1-hour scoring proof | Not final yet; current evidence is local live measurement, not hosted final proof. |
+
+The implementation has the FastAPI scaffold, typed request parsing, error
 mapping, response classification, direct Google Lens request construction,
 MrScraper HTML fetch wiring, local `.env` parsing, fixture coverage, and
 dependency metadata.
@@ -235,26 +252,82 @@ Two measured optimizations are currently kept:
 - `MAX_CONCURRENCY` defaults to `16` process-wide upstream slots. This is high
   enough to keep the API responsive at the evaluator's 16.7 requests/minute
   arrival pace without changing the scraping approach.
+- Local request jitter defaults to `0.0s` through `0.25s`. This keeps a small
+  anti-burst delay while avoiding the extra average wait from the earlier
+  `0.25s` through `1.5s` range. In the small live sample below, this reduced
+  average latency from the previous kept `28.62s` run to `22.22s`, about a 22%
+  improvement. Because that sample used 18 requests, re-run the 84-request
+  five-minute estimate before making a final hosted performance claim.
 - The app creates one process-scoped `httpx.AsyncClient` for MrScraper traffic
   and closes it during FastAPI shutdown. This avoids rebuilding the provider
   HTTP client for every upstream hop, keeps connection pooling available, and
-  reduces per-request resource churn during soak tests.
+  reduces per-request resource churn during soak tests. HTTPX documents client
+  connection pooling as a way to reuse TCP connections and reduce latency,
+  round-trips, and connection churn:
+  <https://www.python-httpx.org/advanced/clients/>.
 
 Recent local live measurements with the same `.runtime/live-image-urls.txt`
 input set:
 
-| Run | Server setting | Requests | Valid Exact Match | Error rate | Avg latency | Max latency | Observed-throughput hour estimate |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | `MAX_CONCURRENCY=4` | 84 | 84 | 0% | 26.19s | 34.25s | about 531 valid/hour |
-| Rejected pressure setting | `MAX_CONCURRENCY=8` | 84 | 84 | 0% | 49.02s | 59.36s | 553 valid/hour |
-| Kept optimized setting | `MAX_CONCURRENCY=16` | 48 | 48 | 0% | 28.62s | 40.49s | 834 valid/hour |
+| Run | Server setting | Requests | Valid Exact Match | Error rate | Avg latency | Max latency | Observed-throughput hour estimate | Outcome |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Baseline | `MAX_CONCURRENCY=4`, `REQUEST_DELAY_MIN_SECONDS=0.25`, `REQUEST_DELAY_MAX_SECONDS=1.5` | 84 | 84 | 0% | 26.19s | 34.25s | about 531 valid/hour | Superseded |
+| Rejected pressure setting | `MAX_CONCURRENCY=8`, shared `httpx.AsyncClient` | 84 | 84 | 0% | 49.02s | 59.36s | 553 valid/hour | Rejected; latency too close to limit for little throughput gain |
+| Kept concurrency setting | `MAX_CONCURRENCY=16`, shared `httpx.AsyncClient` | 48 | 48 | 0% | 28.62s | 40.49s | 834 valid/hour | Kept; best throughput evidence so far |
+| Rejected provider resource blocking | `MAX_CONCURRENCY=4` from local `.env`, `MRSCRAPER_BLOCK_RESOURCES=true` | 18 | 18 | 0% | 49.26s | 76.13s | 472 valid/hour | Rejected; MrScraper's resource-blocking hint was slower for this Lens flow |
+| Kept low-jitter setting | `MAX_CONCURRENCY=16`, `REQUEST_DELAY_MIN_SECONDS=0`, `REQUEST_DELAY_MAX_SECONDS=0.25`, `MRSCRAPER_BLOCK_RESOURCES=false` | 18 | 18 | 0% | 22.22s | 26.48s | 943 valid/hour | Kept; about 22% lower average latency than the prior kept 16-slot run |
 
 The `MAX_CONCURRENCY=8` pressure run stayed under the 60-second latency target,
 but it did not materially improve observed throughput and pushed p95 latency
 close to the limit. The `MAX_CONCURRENCY=16` run preserved a 0% measured error
 rate, kept max latency around 40 seconds, and improved the observed-throughput
-hour estimate by roughly 57% compared with the earlier 4-slot baseline. These
-are local live measurements, not a substitute for the final hosted 1-hour run.
+hour estimate by roughly 57% compared with the earlier 4-slot baseline.
+
+The resource-blocking experiment came from MrScraper's CLI documentation, which
+describes `--block-resources` as an HTML-mode option to block images, CSS, and
+fonts for faster loading:
+<https://docs.mrscraper.com/docs/getting-started/cli>. It was plausible because
+this API returns HTML, not screenshots or page assets. It was rejected because
+the measured Google Lens path got slower and had a higher tail latency. The
+option remains available as `MRSCRAPER_BLOCK_RESOURCES=true` for future hosted
+provider tests, but it is not the default.
+
+These are local live measurements, not a substitute for the final hosted
+one-hour run. Use the 84-request five-minute estimate before claiming a hosted
+max-concurrency result, and reserve the full 1,000-request run for final
+submission evidence.
+
+## Latency Diagnosis
+
+The dominant latency source is provider-side Google Lens fetching, not FastAPI
+or local Python work. A successful API request commonly requires two upstream
+MrScraper fetches:
+
+1. Fetch `https://lens.google.com/uploadbyurl?url=...` through MrScraper.
+2. Parse the returned Google Search / Lens HTML, extract the Exact Match
+   `udm=48` tab URL, and fetch that URL through MrScraper.
+
+That means one client request pays for two Google-facing anti-bot/rendering
+operations. The provider is also responsible for residential or otherwise
+rotated Google-facing behavior; plain local or datacenter HTTP requests have
+returned Google `403` pages in live probes, so bypassing the provider is not a
+valid optimization for this challenge.
+
+Measured local contributors:
+
+- Provider fetch time dominates the 20s-50s observed request latencies.
+- Two-hop request shape doubles provider exposure for the common success path.
+- Local jitter used to add about `0.25s` to `1.5s` before upstream work; lowering
+  it to `0s` through `0.25s` removed avoidable local wait without increasing the
+  measured error rate in the 18-request sample.
+- A shared `httpx.AsyncClient` avoids per-hop connection setup to the MrScraper
+  API. HTTPX resource limits are configured with enough keep-alive connections
+  for the current `MAX_CONCURRENCY=16` default:
+  <https://www.python-httpx.org/advanced/resource-limits/>.
+- Concurrency is a throughput and queueing lever, not a pure per-request
+  latency lever. The 8-slot run was slower than both the 4-slot baseline and the
+  16-slot run, which suggests provider-side scheduling variance matters and
+  each setting must be measured.
 
 ## Provider Configuration
 
@@ -266,9 +339,12 @@ The API reads these environment variables:
 - `MAX_CONCURRENCY`: process-wide upstream concurrency limit for this API
   process. Defaults to `16`, based on the live optimization run above.
 - `REQUEST_DELAY_MIN_SECONDS`: minimum randomized local delay before each
-  provider request. Defaults to `0.25`.
+  provider request. Defaults to `0.0`.
 - `REQUEST_DELAY_MAX_SECONDS`: maximum randomized local delay before each
-  provider request. Defaults to `1.5`.
+  provider request. Defaults to `0.25`.
+- `MRSCRAPER_BLOCK_RESOURCES`: optional MrScraper resource-blocking hint for
+  images, CSS, and fonts. Defaults to `false` because the live Lens experiment
+  was slower with it enabled.
 - `USER_AGENT`: user agent sent upstream.
 - `MRSCRAPER_API_KEY`: required MrScraper Scraper API token. The app asks
   MrScraper's HTML fetch endpoint to fetch each Google Lens / Search URL with
