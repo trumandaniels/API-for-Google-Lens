@@ -196,10 +196,12 @@ python3 scripts/measure_lens_api.py \
 ```
 
 The 5-minute estimate is the preferred routine measurement because it uses
-about one-twelfth of the credits of a full challenge run. It projects the
-observed counts by `12` to estimate a 1-hour result and checks the scaled
-thresholds: at least 25 valid Exact Match HTML responses in 5 minutes, average
-latency at or below 60 seconds, and error rate at or below 10%.
+about one-twelfth of the credits of a full challenge run. It reports both the
+planned `x12` projection and an observed-throughput hour estimate based on the
+actual elapsed seconds, so slow provider responses or API queuing remain visible
+in the artifact. The scaled checks require at least 25 valid Exact Match HTML
+responses, average latency at or below 60 seconds, and error rate at or below
+10%.
 
 Full 1-hour challenge evidence run:
 

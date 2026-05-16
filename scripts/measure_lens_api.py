@@ -188,12 +188,17 @@ def summarize_results(
     results: list[MeasurementResult],
     thresholds: Thresholds | None,
     projection_multiplier: float | None = None,
+    elapsed_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Summarize request measurements and compute threshold verdicts.
 
     Args:
         results: Per-request measurements.
         thresholds: Optional pass/fail thresholds.
+        projection_multiplier: Optional count multiplier for planned-duration
+            projections, such as 5-minute-to-1-hour estimates.
+        elapsed_seconds: Optional measured wall-clock duration. When provided,
+            the summary includes an observed-throughput 1-hour estimate.
 
     Returns:
         JSON-serializable summary object.
@@ -241,6 +246,41 @@ def summarize_results(
             "p95LatencySeconds": metrics["p95LatencySeconds"],
             "maxLatencySeconds": metrics["maxLatencySeconds"],
         }
+    observed_hour_estimate = None
+    observed_hour_checks: dict[str, bool] | None = None
+    observed_hour_passed: bool | None = None
+    if elapsed_seconds is not None and elapsed_seconds > 0:
+        observed_multiplier = 3600.0 / elapsed_seconds
+        observed_hour_estimate = {
+            "elapsedSeconds": elapsed_seconds,
+            "projectionMultiplier": observed_multiplier,
+            "requestsPerMinute": total / (elapsed_seconds / 60.0),
+            "totalRequests": round(total * observed_multiplier),
+            "validExactMatchCount": round(valid_exact * observed_multiplier),
+            "invalid2xxCount": round(invalid_2xx * observed_multiplier),
+            "botBlockCount": round(bot_blocks * observed_multiplier),
+            "httpErrorCount": round(http_errors * observed_multiplier),
+            "networkErrorCount": round(network_errors * observed_multiplier),
+            "errorCount": round(error_count * observed_multiplier),
+            "validExactMatchRate": metrics["validExactMatchRate"],
+            "errorRate": metrics["errorRate"],
+            "averageLatencySeconds": metrics["averageLatencySeconds"],
+            "p50LatencySeconds": metrics["p50LatencySeconds"],
+            "p95LatencySeconds": metrics["p95LatencySeconds"],
+            "maxLatencySeconds": metrics["maxLatencySeconds"],
+        }
+        observed_hour_checks = {
+            "validExactMatchCount": (
+                observed_hour_estimate["validExactMatchCount"]
+                >= CHALLENGE_MIN_VALID_EXACT
+            ),
+            "averageLatencySeconds": (
+                metrics["averageLatencySeconds"]
+                <= CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS
+            ),
+            "errorRate": metrics["errorRate"] <= CHALLENGE_MAX_ERROR_RATE,
+        }
+        observed_hour_passed = all(observed_hour_checks.values())
 
     checks: dict[str, bool] = {}
     if thresholds is not None:
@@ -255,6 +295,9 @@ def summarize_results(
     return {
         "checks": checks,
         "metrics": metrics,
+        "observedHourChallengeChecks": observed_hour_checks,
+        "observedHourChallengePassed": observed_hour_passed,
+        "observedHourEstimate": observed_hour_estimate,
         "passed": all(checks.values()) if checks else None,
         "projectedHourEstimate": projected_hour_estimate,
         "thresholds": asdict(thresholds) if thresholds is not None else None,
@@ -382,6 +425,7 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
     """Render a compact human-readable measurement report."""
 
     metrics = summary["metrics"]
+    observed_hour_estimate = summary["observedHourEstimate"]
     projected_hour_estimate = summary["projectedHourEstimate"]
     thresholds = summary["thresholds"]
     lines = [
@@ -428,6 +472,31 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
                 (
                     "- Projected average latency seconds: "
                     f"`{projected_hour_estimate['averageLatencySeconds']:.3f}`"
+                ),
+            ]
+        )
+    if observed_hour_estimate is not None:
+        lines.extend(
+            [
+                "",
+                "## Observed-Throughput Hour Estimate",
+                "",
+                f"- Elapsed seconds: `{observed_hour_estimate['elapsedSeconds']:.3f}`",
+                (
+                    "- Observed requests per minute: "
+                    f"`{observed_hour_estimate['requestsPerMinute']:.3f}`"
+                ),
+                (
+                    "- Observed-throughput projected total requests: "
+                    f"`{observed_hour_estimate['totalRequests']}`"
+                ),
+                (
+                    "- Observed-throughput projected valid Exact Match responses: "
+                    f"`{observed_hour_estimate['validExactMatchCount']}`"
+                ),
+                (
+                    "- Observed-throughput challenge passed: "
+                    f"`{summary['observedHourChallengePassed']}`"
                 ),
             ]
         )
@@ -556,6 +625,7 @@ async def async_main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     started_at = utc_timestamp()
+    wall_started = time.perf_counter()
     results = await run_measurement(
         base_url=args.base_url,
         image_urls=image_urls,
@@ -564,8 +634,14 @@ async def async_main() -> int:
         rate_per_minute=args.rate_per_minute,
         timeout_seconds=args.timeout_seconds,
     )
+    elapsed_seconds = time.perf_counter() - wall_started
     finished_at = utc_timestamp()
-    summary = summarize_results(results, thresholds, projection_multiplier)
+    summary = summarize_results(
+        results,
+        thresholds,
+        projection_multiplier,
+        elapsed_seconds,
+    )
     run_config = {
         "baseUrl": args.base_url,
         "concurrency": args.concurrency,
@@ -589,6 +665,8 @@ async def async_main() -> int:
         output_dir / "verdict.json",
         {
             "metrics": summary["metrics"],
+            "observedHourChallengePassed": summary["observedHourChallengePassed"],
+            "observedHourEstimate": summary["observedHourEstimate"],
             "passed": summary["passed"],
             "projectedHourEstimate": summary["projectedHourEstimate"],
         },

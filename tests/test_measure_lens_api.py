@@ -106,6 +106,33 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(summary["projectedHourEstimate"]["validExactMatchCount"], 24)
         self.assertEqual(summary["projectedHourEstimate"]["errorRate"], 0.0)
 
+    def test_summarizes_observed_hour_estimate_from_elapsed_time(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=index,
+                image_url_hash=str(index),
+                status_code=200,
+                latency_seconds=2.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+            )
+            for index in range(10)
+        ]
+
+        summary = measure_lens_api.summarize_results(
+            results,
+            thresholds=None,
+            elapsed_seconds=120.0,
+        )
+
+        self.assertEqual(summary["observedHourEstimate"]["totalRequests"], 300)
+        self.assertEqual(
+            summary["observedHourEstimate"]["validExactMatchCount"],
+            300,
+        )
+        self.assertEqual(summary["observedHourEstimate"]["requestsPerMinute"], 5.0)
+        self.assertTrue(summary["observedHourChallengePassed"])
+
     def test_five_minute_estimate_uses_scaled_challenge_threshold(self) -> None:
         args = Namespace(
             target="five-minute-estimate",
