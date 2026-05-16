@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.errors import ProviderCreditsExhaustedError
+from app.errors import BotBlockError, ProviderCreditsExhaustedError, UpstreamRequestError
 from app.lens.direct import DirectLensResponse
 from app.lens.service import (
     PROVIDER_CREDIT_ERROR_DETAIL,
@@ -30,9 +30,10 @@ class StaticLensClient:
 
 class ProviderCreditErrorTests(unittest.IsolatedAsyncioTestCase):
     def test_detects_provider_credit_exhaustion_marker(self) -> None:
-        self.assertTrue(is_provider_credit_error("Out of Proxy Credits"))
-        self.assertTrue(is_provider_credit_error('{"error":"insufficient credits"}'))
-        self.assertFalse(is_provider_credit_error("<html>Exact matches</html>"))
+        self.assertTrue(is_provider_credit_error(402, ""))
+        self.assertTrue(is_provider_credit_error(400, "Out of Proxy Credits"))
+        self.assertTrue(is_provider_credit_error(400, '{"error":"insufficient credits"}'))
+        self.assertFalse(is_provider_credit_error(200, "<html>Exact matches</html>"))
 
     async def test_service_raises_specific_provider_credit_error(self) -> None:
         service = GoogleLensService(
@@ -52,6 +53,44 @@ class ProviderCreditErrorTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(context.exception.message, PROVIDER_CREDIT_ERROR_DETAIL)
+
+    async def test_service_maps_provider_rate_limit_to_bot_block(self) -> None:
+        service = GoogleLensService(
+            client=StaticLensClient(
+                DirectLensResponse(
+                    html="Too Many Requests",
+                    final_url="https://api.mrscraper.com",
+                    status_code=429,
+                )
+            ),  # type: ignore[arg-type]
+            limiter=AsyncConcurrencyLimiter(1),
+        )
+
+        with self.assertRaises(BotBlockError) as context:
+            await service.fetch_exact_match_html(
+                ImageUrl.parse("https://example.com/image.jpg")
+            )
+
+        self.assertIn("rate limited", context.exception.message)
+
+    async def test_service_reports_upstream_status_code_in_generic_failure(self) -> None:
+        service = GoogleLensService(
+            client=StaticLensClient(
+                DirectLensResponse(
+                    html="Internal Server Error",
+                    final_url="https://api.mrscraper.com",
+                    status_code=503,
+                )
+            ),  # type: ignore[arg-type]
+            limiter=AsyncConcurrencyLimiter(1),
+        )
+
+        with self.assertRaises(UpstreamRequestError) as context:
+            await service.fetch_exact_match_html(
+                ImageUrl.parse("https://example.com/image.jpg")
+            )
+
+        self.assertIn("HTTP 503", context.exception.message)
 
 
 if __name__ == "__main__":

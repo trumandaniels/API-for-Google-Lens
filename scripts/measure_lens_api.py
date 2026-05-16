@@ -225,6 +225,40 @@ def classify_response(status_code: int, body: str, final_url: str) -> tuple[str,
     return "http_error", html_verdict
 
 
+def summarize_error_detail(status_code: int, body: str, verdict: str) -> str | None:
+    """Return a short API-safe error detail for failed measurements.
+
+    Args:
+        status_code: HTTP status code returned by the measured API.
+        body: Response body returned by the measured API.
+        verdict: Aggregate response verdict.
+
+    Returns:
+        Short diagnostic detail for non-successful measurements, or `None` for
+        valid Exact Match responses.
+    """
+
+    if verdict == "valid_exact_match":
+        return None
+    if status_code == 200:
+        return "2xx response did not classify as Exact Match HTML"
+
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if isinstance(parsed, dict) and isinstance(parsed.get("detail"), str):
+        detail = parsed["detail"]
+    else:
+        detail = body
+
+    compact = " ".join(detail.split())
+    if len(compact) > 240:
+        return compact[:237] + "..."
+    return compact or None
+
+
 def summarize_results(
     results: list[MeasurementResult],
     thresholds: Thresholds | None,
@@ -382,6 +416,11 @@ async def measure_one(
             response.text,
             str(response.url),
         )
+        error_detail = summarize_error_detail(
+            response.status_code,
+            response.text,
+            verdict,
+        )
         return MeasurementResult(
             index=index,
             image_url_hash=hash_url(image_url),
@@ -389,6 +428,7 @@ async def measure_one(
             latency_seconds=latency,
             verdict=verdict,
             html_verdict=html_verdict,
+            error=error_detail,
         )
     except Exception as error:
         latency = time.perf_counter() - started

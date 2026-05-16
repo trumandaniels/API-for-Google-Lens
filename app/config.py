@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 DEFAULT_GOOGLE_BASE_URL = "https://lens.google.com/uploadbyurl"
 DEFAULT_MRSCRAPER_API_URL = "https://api.mrscraper.com"
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 45.0
 DEFAULT_MAX_CONCURRENCY = 16
 DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.0
 DEFAULT_REQUEST_DELAY_MAX_SECONDS = 0.25

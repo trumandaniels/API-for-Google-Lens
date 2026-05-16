@@ -40,6 +40,24 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertEqual(verdict, "invalid_2xx")
         self.assertEqual(html_verdict, "unknown")
 
+    def test_summarizes_json_error_detail_without_full_body(self) -> None:
+        detail = measure_lens_api.summarize_error_detail(
+            502,
+            '{"detail":"Provider or Google returned HTTP 503"}',
+            "http_error",
+        )
+
+        self.assertEqual(detail, "Provider or Google returned HTTP 503")
+
+    def test_summarizes_invalid_2xx_detail(self) -> None:
+        detail = measure_lens_api.summarize_error_detail(
+            200,
+            "<html>Search Results</html>",
+            "invalid_2xx",
+        )
+
+        self.assertEqual(detail, "2xx response did not classify as Exact Match HTML")
+
     def test_builds_deterministic_image_url_schedule_by_cycling(self) -> None:
         schedule = measure_lens_api.build_image_url_schedule(
             ["https://example.com/a.jpg", "https://example.com/b.jpg"],

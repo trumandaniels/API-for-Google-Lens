@@ -24,6 +24,7 @@ PROVIDER_CREDIT_ERROR_DETAIL = (
     "Out of Proxy Credits. Provide your own MrScraper API key with "
     "X-MrScraper-Api-Key or add credits to trumanadaniels at gmail dot com."
 )
+PROVIDER_RATE_LIMIT_DETAIL = "Provider or Google rate limited the request"
 PROVIDER_CREDIT_ERROR_MARKERS = (
     "out of proxy credits",
     "proxy credits",
@@ -32,15 +33,19 @@ PROVIDER_CREDIT_ERROR_MARKERS = (
 )
 
 
-def is_provider_credit_error(html: str) -> bool:
+def is_provider_credit_error(status_code: int, html: str) -> bool:
     """Return whether a provider response indicates exhausted proxy credits.
 
     Args:
+        status_code: Upstream HTTP status code returned by the provider.
         html: Upstream response body returned by the scraping provider.
 
     Returns:
         `True` when the body contains a known credit-exhaustion marker.
     """
+
+    if status_code == 402:
+        return True
 
     normalized = html.lower()
     return any(marker in normalized for marker in PROVIDER_CREDIT_ERROR_MARKERS)
@@ -146,12 +151,18 @@ class GoogleLensService:
             await self.wait_before_upstream_request()
             response = await self.client.fetch_exact_match_html(image_url, token_override)
 
-        if is_provider_credit_error(response.html):
+        if is_provider_credit_error(response.status_code, response.html):
             raise ProviderCreditsExhaustedError(PROVIDER_CREDIT_ERROR_DETAIL)
+        if response.status_code == 429:
+            raise BotBlockError(PROVIDER_RATE_LIMIT_DETAIL)
         if response.status_code >= 500:
-            raise UpstreamRequestError("Google returned a server error")
+            raise UpstreamRequestError(
+                f"Provider or Google returned HTTP {response.status_code}"
+            )
         if response.status_code >= 400:
-            raise UpstreamRequestError("Google returned a client error")
+            raise UpstreamRequestError(
+                f"Provider or Google returned HTTP {response.status_code}"
+            )
 
         classification = classify_google_html(response.html, response.final_url)
         if classification.verdict == HtmlVerdict.EXACT_MATCH:
