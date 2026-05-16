@@ -15,6 +15,7 @@ from app.errors import (
     UpstreamRequestError,
 )
 from app.lens.classifier import HtmlVerdict, classify_google_html
+from app.lens.cache import ExactMatchResponseCache
 from app.lens.direct import DirectLensClient
 from app.models import ExactMatchHtml, ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
@@ -60,12 +61,14 @@ class GoogleLensService:
         limiter: Concurrency limiter for upstream calls.
         request_delay_min_seconds: Minimum randomized delay before provider calls.
         request_delay_max_seconds: Maximum randomized delay before provider calls.
+        cache: Optional successful-response cache keyed by public image URL.
     """
 
     client: DirectLensClient
     limiter: AsyncConcurrencyLimiter
     request_delay_min_seconds: float = 0.0
     request_delay_max_seconds: float = 0.0
+    cache: ExactMatchResponseCache | None = None
 
     @classmethod
     def from_settings(
@@ -99,6 +102,10 @@ class GoogleLensService:
             limiter=limiter,
             request_delay_min_seconds=settings.request_delay_min_seconds,
             request_delay_max_seconds=settings.request_delay_max_seconds,
+            cache=ExactMatchResponseCache(
+                max_entries=settings.response_cache_max_entries,
+                ttl_seconds=settings.response_cache_ttl_seconds,
+            ),
         )
 
     async def wait_before_upstream_request(self) -> None:
@@ -129,6 +136,39 @@ class GoogleLensService:
         token_override: ProviderApiToken | None = None,
     ) -> ExactMatchHtml:
         """Fetch and classify Exact Match HTML for an image URL.
+
+        Args:
+            image_url: Parsed image URL from the API boundary.
+            token_override: Optional per-request provider token supplied by the
+                API caller.
+
+        Returns:
+            Raw Exact Match HTML and source URL.
+
+        Raises:
+            UpstreamRequestError: If Google returns a non-success HTTP status.
+            ProviderCreditsExhaustedError: If the provider token has run out
+                of proxy credits.
+            BotBlockError: If the response appears to be CAPTCHA or bot-check HTML.
+            GoogleErrorPageError: If the response appears to be a Google error page.
+            ExactMatchNotFoundError: If the response cannot be classified as Exact
+                Match HTML.
+        """
+        if self.cache is None:
+            return await self._fetch_exact_match_html_uncached(image_url, token_override)
+
+        async def create_response() -> ExactMatchHtml:
+            """Fetch one uncached response for the cache miss path."""
+            return await self._fetch_exact_match_html_uncached(image_url, token_override)
+
+        return await self.cache.get_or_create(image_url.value, create_response)
+
+    async def _fetch_exact_match_html_uncached(
+        self,
+        image_url: ImageUrl,
+        token_override: ProviderApiToken | None = None,
+    ) -> ExactMatchHtml:
+        """Fetch, classify, and return one uncached Exact Match response.
 
         Args:
             image_url: Parsed image URL from the API boundary.

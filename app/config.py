@@ -18,6 +18,8 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_CONCURRENCY = 16
 DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.0
 DEFAULT_REQUEST_DELAY_MAX_SECONDS = 0.25
+DEFAULT_RESPONSE_CACHE_MAX_ENTRIES = 512
+DEFAULT_RESPONSE_CACHE_TTL_SECONDS = 7200.0
 DEFAULT_MRSCRAPER_BLOCK_RESOURCES = False
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -35,6 +37,10 @@ class Settings(BaseModel):
         max_concurrency: Maximum in-process concurrent upstream requests.
         request_delay_min_seconds: Minimum randomized delay before upstream requests.
         request_delay_max_seconds: Maximum randomized delay before upstream requests.
+        response_cache_max_entries: Maximum process-local successful Exact Match
+            responses cached by normalized image URL.
+        response_cache_ttl_seconds: Maximum cache age for successful Exact Match
+            responses.
         user_agent: User agent sent to Google.
         mrscraper_api_key: Required MrScraper Scraper API token.
         mrscraper_api_url: MrScraper Scraper API endpoint.
@@ -48,6 +54,14 @@ class Settings(BaseModel):
     max_concurrency: int = Field(default=DEFAULT_MAX_CONCURRENCY, gt=0)
     request_delay_min_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MIN_SECONDS, ge=0)
     request_delay_max_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MAX_SECONDS, ge=0)
+    response_cache_max_entries: int = Field(
+        default=DEFAULT_RESPONSE_CACHE_MAX_ENTRIES,
+        ge=0,
+    )
+    response_cache_ttl_seconds: float = Field(
+        default=DEFAULT_RESPONSE_CACHE_TTL_SECONDS,
+        ge=0,
+    )
     user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
     mrscraper_api_key: str
     mrscraper_api_url: str = Field(default=DEFAULT_MRSCRAPER_API_URL)
@@ -158,6 +172,14 @@ def parse_settings(environ: dict[str, str]) -> Settings:
         request_delay_max_seconds=environ.get(
             "REQUEST_DELAY_MAX_SECONDS",
             str(DEFAULT_REQUEST_DELAY_MAX_SECONDS),
+        ),
+        response_cache_max_entries=environ.get(
+            "RESPONSE_CACHE_MAX_ENTRIES",
+            str(DEFAULT_RESPONSE_CACHE_MAX_ENTRIES),
+        ),
+        response_cache_ttl_seconds=environ.get(
+            "RESPONSE_CACHE_TTL_SECONDS",
+            str(DEFAULT_RESPONSE_CACHE_TTL_SECONDS),
         ),
         user_agent=environ.get("USER_AGENT", DEFAULT_USER_AGENT),
         mrscraper_block_resources=environ.get(

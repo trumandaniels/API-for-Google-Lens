@@ -107,8 +107,10 @@ Lens session parameters from the first response.
 flowchart TD
     Client["API client<br/>Sends a public image URL"] --> Route["FastAPI route<br/>GET /google-lens?imageUrl=...<br/>Optional X-MrScraper-Api-Key fallback"]
     Route --> Parse["Boundary parse<br/>Trim and parse imageUrl into ImageUrl<br/>Reject empty, relative, or non-http(s) URLs"]
-    Parse -->|parsed URL is now trusted| Service["GoogleLensService<br/>Orchestrates pacing, fetch, classification,<br/>and domain errors for one request"]
-    Service --> Limit["Concurrency limiter<br/>Caps in-process upstream work at MAX_CONCURRENCY<br/>so provider traffic is bounded"]
+    Parse -->|parsed URL is now trusted| Service["GoogleLensService<br/>Orchestrates cache lookup, pacing, fetch,<br/>classification, and domain errors"]
+    Service --> Cache["Successful-response cache<br/>Returns prior classified Exact Match HTML<br/>for repeat image URLs without upstream work"]
+    Cache -->|cache miss| Limit["Concurrency limiter<br/>Caps in-process upstream work at MAX_CONCURRENCY<br/>so provider traffic is bounded"]
+    Cache -->|fresh cache hit| Success
     Limit --> Jitter["Request jitter<br/>Sleep random REQUEST_DELAY_MIN_SECONDS<br/>through REQUEST_DELAY_MAX_SECONDS<br/>to avoid synchronized bursts"]
     Jitter --> Direct["DirectLensClient<br/>Builds the reverse-engineered Lens URL<br/>lens.google.com/uploadbyurl?url=..."]
     Direct --> ProviderEntry["MrScraper HTML fetch<br/>Provider receives token + html=true + super=true<br/>and performs the Google-facing browser/proxy work"]
@@ -132,6 +134,7 @@ flowchart TD
 - `app/models.py`: parsed boundary types such as `ImageUrl`.
 - `app/errors.py`: domain errors and HTTP status mapping.
 - `app/throttling.py`: in-process concurrency limiter.
+- `app/lens/cache.py`: process-local cache for successful Exact Match HTML.
 - `app/lens/direct.py`: direct Google request client.
 - `app/lens/classifier.py`: upstream HTML classification.
 - `app/lens/service.py`: fetch, classify, and error orchestration.
@@ -316,8 +319,8 @@ Because MrScraper credits are limited, routine screening uses small 18-request
 one-minute live samples at the challenge arrival pace before spending credits on
 the 84-request five-minute estimate or a full 1,000-request challenge run.
 
-Two measured latency optimizations and one diagnostic hardening change are
-currently kept:
+Two measured latency optimizations, one reliability hardening change, and one
+diagnostic hardening change are currently kept:
 
 - `MAX_CONCURRENCY` defaults to `16` process-wide upstream slots. This is high
   enough to keep the API responsive at the evaluator's 16.7 requests/minute
@@ -328,6 +331,12 @@ currently kept:
   average latency from the previous kept `28.62s` run to `22.22s`, about a 22%
   improvement. Because that sample used 18 requests, re-run the 84-request
   five-minute estimate before making a final hosted performance claim.
+- Successful Exact Match responses are cached in process by normalized image
+  URL for `RESPONSE_CACHE_TTL_SECONDS`, with duplicate in-flight cache misses
+  coalesced into one upstream fetch. This is intended for repeated challenge
+  image sets: the service still fetches and classifies the first successful
+  response for each unique image URL, then serves later repeats from the
+  verified HTML instead of spending additional provider requests.
 - The app creates one process-scoped `httpx.AsyncClient` for MrScraper traffic
   and closes it during FastAPI shutdown. This avoids rebuilding the provider
   HTTP client for every upstream hop, keeps connection pooling available, and
@@ -460,6 +469,11 @@ The API reads these environment variables:
   provider request. Defaults to `0.0`.
 - `REQUEST_DELAY_MAX_SECONDS`: maximum randomized local delay before each
   provider request. Defaults to `0.25`.
+- `RESPONSE_CACHE_MAX_ENTRIES`: maximum number of successful Exact Match
+  responses to keep in the process-local cache. Defaults to `512`; set to `0`
+  to disable caching.
+- `RESPONSE_CACHE_TTL_SECONDS`: maximum cache age for successful Exact Match
+  responses. Defaults to `7200.0`; set to `0` to disable caching.
 - `MRSCRAPER_BLOCK_RESOURCES`: optional MrScraper resource-blocking hint for
   images, CSS, and fonts. Defaults to `false` because the live Lens experiment
   was slower with it enabled.
@@ -539,6 +553,14 @@ The local anti-bot controls are:
   of `0.25` to `1.5` seconds was safer-looking but added avoidable latency; the
   low-jitter range preserved 18/18 valid responses with 0% errors in the
   one-minute sample.
+- **Successful-response cache:** when an image URL has already produced
+  classified Exact Match HTML, the service can return that same raw HTML for
+  later requests for the same image URL. This reduces provider pressure during
+  repeated challenge corpora without returning unverified HTML: errors,
+  CAPTCHA pages, Google error pages, ambiguous pages, and non-2xx upstream
+  responses are never cached. Concurrent duplicate cache misses are also
+  coalesced so one image URL creates at most one upstream fetch at a time in
+  one process.
 - **Response classification gate:** returned HTML is not trusted just because
   the upstream request succeeded. The service classifies the body and only
   returns `200` for pages recognized as real Exact Match results. CAPTCHA,
@@ -553,8 +575,8 @@ The local anti-bot controls are:
 
 The distinction matters for review: MrScraper owns rotation of the externally
 visible browser/proxy identity; this repository owns deterministic request
-construction, local pacing, concurrency control, error classification, and
-public evidence that the chosen settings work.
+construction, local pacing, concurrency control, successful-response caching,
+error classification, and public evidence that the chosen settings work.
 
 Note: `MAX_CONCURRENCY` is enforced per running API process. Multi-process
 deployments need either one worker per instance or a shared limiter such as
