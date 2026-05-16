@@ -61,16 +61,16 @@ direct non-provider Google traffic is not a supported runtime path.
 GET /google-lens?imageUrl=<image_url>
 ```
 
-Optional trusted-evaluator fallback header:
+Optional fallback header:
 
 ```text
-X-MrScraper-Api-Key: <alternate_mrscraper_token>
+X-MrScraper-Api-Key: <your_mrscraper_api_key>
 ```
 
-When this header is omitted, the service uses the deployed `MRSCRAPER_API_KEY`
-environment variable. The header is intentionally optional and should only be
-shared with trusted evaluators if the deployed token runs out of credits during
-testing.
+Unauthenticated requests use the deployed server's MrScraper credits. If the
+server runs out of credits, go to [MrScraper.com](https://mrscraper.com),
+create a free account, and pass that account's API key in
+`X-MrScraper-Api-Key` when making a request.
 
 Success response:
 
@@ -84,9 +84,9 @@ Content-Type: text/html
 Expected failure responses include:
 
 - `400` for malformed `imageUrl` input.
-- `402` when the configured scraping provider token is out of proxy credits.
-  Provide your own MrScraper API key with `X-MrScraper-Api-Key` or add credits
-  to `trumanadaniels at gmail dot com`.
+- `402` when the unauthenticated server is out of MrScraper credits. Create a
+  free account at [MrScraper.com](https://mrscraper.com) and retry with your
+  API key in `X-MrScraper-Api-Key`.
 - `429` for CAPTCHA, bot-check, or Google block pages.
 - `502` for upstream request failures or unrecognized Google result pages.
 - `504` for upstream timeouts.
@@ -105,7 +105,7 @@ Lens session parameters from the first response.
 
 ```mermaid
 flowchart TD
-    Client["API client<br/>Sends a public image URL"] --> Route["FastAPI route<br/>GET /google-lens?imageUrl=...<br/>Optional trusted X-MrScraper-Api-Key fallback"]
+    Client["API client<br/>Sends a public image URL"] --> Route["FastAPI route<br/>GET /google-lens?imageUrl=...<br/>Optional X-MrScraper-Api-Key fallback"]
     Route --> Parse["Boundary parse<br/>Trim and parse imageUrl into ImageUrl<br/>Reject empty, relative, or non-http(s) URLs"]
     Parse -->|parsed URL is now trusted| Service["GoogleLensService<br/>Orchestrates pacing, fetch, classification,<br/>and domain errors for one request"]
     Service --> Limit["Concurrency limiter<br/>Caps in-process upstream work at MAX_CONCURRENCY<br/>so provider traffic is bounded"]
@@ -481,11 +481,11 @@ MrScraper Scraper API / Playground example:
 export MRSCRAPER_API_KEY='atk_example'
 ```
 
-Trusted evaluator fallback using a per-request MrScraper token:
+Fallback using your own MrScraper API key:
 
 ```bash
 curl \
-  -H "X-MrScraper-Api-Key: atk_evaluator_example" \
+  -H "X-MrScraper-Api-Key: atk_your_mrscraper_api_key" \
   'http://127.0.0.1:8000/google-lens?imageUrl=https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
 ```
 
@@ -496,8 +496,9 @@ that MrScraper supplies the Google-facing proxy rotation and anti-bot handling;
 this app adds local concurrency limits and randomized request pacing so it does
 not send avoidable bursts into the provider. The optional
 `X-MrScraper-Api-Key` request header overrides the configured token for that
-single API call without changing the public endpoint contract. Do not commit API
-keys or saved live HTML that includes account-specific request metadata.
+single API call, which lets evaluators retry with their own MrScraper account if
+the unauthenticated server is out of credits. Do not commit API keys or saved
+live HTML that includes account-specific request metadata.
 
 ### Anti-Bot And Bot-Evasion Posture
 

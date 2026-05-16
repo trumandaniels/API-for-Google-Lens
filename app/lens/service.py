@@ -21,8 +21,8 @@ from app.throttling import AsyncConcurrencyLimiter
 
 
 PROVIDER_CREDIT_ERROR_DETAIL = (
-    "Out of Proxy Credits. Provide your own MrScraper API key with "
-    "X-MrScraper-Api-Key or add credits to trumanadaniels at gmail dot com."
+    "Out of MrScraper credits. Create a free account at MrScraper.com, then "
+    "pass your API key in the X-MrScraper-Api-Key header."
 )
 PROVIDER_RATE_LIMIT_DETAIL = "Provider or Google rate limited the request"
 PROVIDER_CREDIT_ERROR_MARKERS = (

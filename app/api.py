@@ -50,8 +50,8 @@ async def google_lens(
     Args:
         imageUrl: URL of the image to submit to Google Lens.
         mrscraper_api_key: Optional per-request MrScraper token override. This
-            is intended for trusted evaluator fallback use when the configured
-            deployment token runs out of credits.
+            lets callers retry with their own MrScraper account when the
+            unauthenticated deployment is out of credits.
         service: Configured Google Lens service.
 
     Returns:
