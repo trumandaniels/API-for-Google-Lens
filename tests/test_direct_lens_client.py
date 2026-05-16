@@ -4,8 +4,19 @@ import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from app.errors import UpstreamTimeoutError
 from app.lens.direct import DirectLensClient
 from app.models import ImageUrl, ProviderApiToken
+
+
+class TimeoutHttpClient:
+    """Test double that raises a timeout for every request."""
+
+    async def get(self, url: str, headers: dict[str, str]) -> object:
+        """Raise an HTTPX timeout without performing network work."""
+        import httpx
+
+        raise httpx.TimeoutException("timed out")
 
 
 class DirectLensClientTests(unittest.TestCase):
@@ -145,6 +156,25 @@ class DirectLensClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "mrscraper_api_key is required"):
             client.build_mrscraper_api_url("https://lens.google.com/uploadbyurl?url=x")
+
+
+class DirectLensClientAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_error_names_provider_hop(self) -> None:
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_example",
+            http_client=TimeoutHttpClient(),
+        )
+
+        with self.assertLogs("uvicorn.error", level="WARNING") as logs:
+            with self.assertRaisesRegex(UpstreamTimeoutError, "lens_entry"):
+                await client.fetch_exact_match_html(
+                    ImageUrl.parse("https://example.com/image.jpg")
+                )
+
+        self.assertIn("lens_provider_hop_timeout hop=lens_entry", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

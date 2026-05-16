@@ -451,8 +451,9 @@ The API reads these environment variables:
 - `GOOGLE_BASE_URL`: upstream Google Lens base URL. Defaults to
   `https://lens.google.com/uploadbyurl`.
 - `REQUEST_TIMEOUT_SECONDS`: per-provider-hop upstream timeout. Defaults to
-  `45.0`; hosted deployments should not use `30.0` because the Lens entry hop
-  occasionally approaches or exceeds 30 seconds.
+  `60.0`; hosted deployments should not use `30.0` because the Lens entry hop
+  occasionally approaches or exceeds 30 seconds and the Exact Match hop can add
+  another several seconds.
 - `MAX_CONCURRENCY`: process-wide upstream concurrency limit for this API
   process. Defaults to `16`, based on the live optimization run above.
 - `REQUEST_DELAY_MIN_SECONDS`: minimum randomized local delay before each

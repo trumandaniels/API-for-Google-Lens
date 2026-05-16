@@ -272,7 +272,17 @@ class DirectLensClient:
                 )
                 return response
             except httpx.TimeoutException as error:
-                raise UpstreamTimeoutError("Google Lens request timed out") from error
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                LOGGER.warning(
+                    "lens_provider_hop_timeout hop=%s elapsed_ms=%.0f "
+                    "timeout_seconds=%.1f",
+                    hop_name,
+                    elapsed_ms,
+                    self.timeout_seconds,
+                )
+                raise UpstreamTimeoutError(
+                    f"Google Lens {hop_name} request timed out"
+                ) from error
             except httpx.HTTPError as error:
                 raise UpstreamRequestError("Google Lens request failed") from error
 
