@@ -14,23 +14,8 @@ class SettingsParsingTests(unittest.TestCase):
         self.assertEqual(settings.mrscraper_api_key, "atk_example")
         self.assertEqual(settings.mrscraper_api_url, "https://api.mrscraper.com")
         self.assertGreater(settings.request_delay_max_seconds, 0)
-        self.assertEqual(settings.response_cache_max_entries, 512)
-        self.assertEqual(settings.response_cache_ttl_seconds, 7200.0)
         self.assertFalse(settings.mrscraper_block_resources)
         self.assertEqual(settings.log_level, "INFO")
-
-    def test_parses_response_cache_settings(self) -> None:
-        settings = parse_settings(
-            {
-                "MRSCRAPER_API_KEY": "atk_example",
-                "RESPONSE_CACHE_MAX_ENTRIES": "32",
-                "RESPONSE_CACHE_TTL_SECONDS": "120.5",
-            }
-        )
-
-        self.assertEqual(settings.response_cache_max_entries, 32)
-        self.assertEqual(settings.response_cache_ttl_seconds, 120.5)
-
 
     def test_parses_log_level_case_insensitively(self) -> None:
         settings = parse_settings(

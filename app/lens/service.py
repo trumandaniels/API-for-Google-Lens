@@ -15,7 +15,6 @@ from app.errors import (
     UpstreamRequestError,
 )
 from app.lens.classifier import HtmlVerdict, classify_google_html
-from app.lens.cache import ExactMatchResponseCache
 from app.lens.direct import DirectLensClient
 from app.models import ExactMatchHtml, ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
@@ -43,6 +42,12 @@ def is_provider_credit_error(status_code: int, html: str) -> bool:
 
     Returns:
         `True` when the body contains a known credit-exhaustion marker.
+
+    Example:
+        >>> is_provider_credit_error(402, "")
+        True
+        >>> is_provider_credit_error(200, "out of proxy credits")
+        True
     """
 
     if status_code == 402:
@@ -61,14 +66,17 @@ class GoogleLensService:
         limiter: Concurrency limiter for upstream calls.
         request_delay_min_seconds: Minimum randomized delay before provider calls.
         request_delay_max_seconds: Maximum randomized delay before provider calls.
-        cache: Optional successful-response cache keyed by public image URL.
+
+    Example:
+        >>> service = GoogleLensService(client=object(), limiter=AsyncConcurrencyLimiter(1))
+        >>> service.request_delay_max_seconds
+        0.0
     """
 
     client: DirectLensClient
     limiter: AsyncConcurrencyLimiter
     request_delay_min_seconds: float = 0.0
     request_delay_max_seconds: float = 0.0
-    cache: ExactMatchResponseCache | None = None
 
     @classmethod
     def from_settings(
@@ -87,6 +95,12 @@ class GoogleLensService:
 
         Returns:
             Configured GoogleLensService.
+
+        Example:
+            >>> settings = Settings(mrscraper_api_key="token")
+            >>> service = GoogleLensService.from_settings(settings, AsyncConcurrencyLimiter(1))
+            >>> service.client.mrscraper_api_key
+            'token'
         """
         client = DirectLensClient(
             google_base_url=settings.google_base_url,
@@ -102,10 +116,6 @@ class GoogleLensService:
             limiter=limiter,
             request_delay_min_seconds=settings.request_delay_min_seconds,
             request_delay_max_seconds=settings.request_delay_max_seconds,
-            cache=ExactMatchResponseCache(
-                max_entries=settings.response_cache_max_entries,
-                ttl_seconds=settings.response_cache_ttl_seconds,
-            ),
         )
 
     async def wait_before_upstream_request(self) -> None:
@@ -114,6 +124,12 @@ class GoogleLensService:
         The provider-side rotation layer is still responsible for Google-facing
         anti-bot behavior. This local delay reduces avoidable burstiness from
         the API process itself.
+
+        Example:
+            >>> import asyncio
+            >>> service = GoogleLensService(client=object(), limiter=AsyncConcurrencyLimiter(1))
+            >>> asyncio.run(service.wait_before_upstream_request()) is None
+            True
         """
         if self.request_delay_max_seconds <= 0:
             return
@@ -125,7 +141,20 @@ class GoogleLensService:
             await asyncio.sleep(delay)
 
     async def aclose(self) -> None:
-        """Close owned network resources for application shutdown."""
+        """Close owned network resources for application shutdown.
+
+        Example:
+            >>> import asyncio
+            >>> class FakeClient:
+            ...     closed = False
+            ...     async def aclose(self):
+            ...         self.closed = True
+            >>> fake = FakeClient()
+            >>> service = GoogleLensService(client=fake, limiter=AsyncConcurrencyLimiter(1))
+            >>> asyncio.run(service.aclose())
+            >>> fake.closed
+            True
+        """
         close = getattr(self.client, "aclose", None)
         if close is not None:
             await close()
@@ -153,39 +182,17 @@ class GoogleLensService:
             GoogleErrorPageError: If the response appears to be a Google error page.
             ExactMatchNotFoundError: If the response cannot be classified as Exact
                 Match HTML.
-        """
-        if self.cache is None:
-            return await self._fetch_exact_match_html_uncached(image_url, token_override)
 
-        async def create_response() -> ExactMatchHtml:
-            """Fetch one uncached response for the cache miss path."""
-            return await self._fetch_exact_match_html_uncached(image_url, token_override)
-
-        return await self.cache.get_or_create(image_url.value, create_response)
-
-    async def _fetch_exact_match_html_uncached(
-        self,
-        image_url: ImageUrl,
-        token_override: ProviderApiToken | None = None,
-    ) -> ExactMatchHtml:
-        """Fetch, classify, and return one uncached Exact Match response.
-
-        Args:
-            image_url: Parsed image URL from the API boundary.
-            token_override: Optional per-request provider token supplied by the
-                API caller.
-
-        Returns:
-            Raw Exact Match HTML and source URL.
-
-        Raises:
-            UpstreamRequestError: If Google returns a non-success HTTP status.
-            ProviderCreditsExhaustedError: If the provider token has run out
-                of proxy credits.
-            BotBlockError: If the response appears to be CAPTCHA or bot-check HTML.
-            GoogleErrorPageError: If the response appears to be a Google error page.
-            ExactMatchNotFoundError: If the response cannot be classified as Exact
-                Match HTML.
+        Example:
+            >>> import asyncio
+            >>> from app.lens.direct import DirectLensResponse
+            >>> class FakeClient:
+            ...     async def fetch_exact_match_html(self, image_url, token_override=None):
+            ...         return DirectLensResponse("<html>Exact matches Search Results</html>", "https://www.google.com/search?udm=48", 200)
+            >>> service = GoogleLensService(client=FakeClient(), limiter=AsyncConcurrencyLimiter(1))
+            >>> result = asyncio.run(service.fetch_exact_match_html(ImageUrl.parse("https://example.com/a.jpg")))
+            >>> result.source_url
+            'https://www.google.com/search?udm=48'
         """
         async with self.limiter.slot():
             await self.wait_before_upstream_request()

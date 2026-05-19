@@ -138,10 +138,10 @@ curl \
 
 ## Request Flow
 
-Request path: client to FastAPI, parse `imageUrl`, check the cache, enter the
-concurrency limiter, fetch `https://lens.google.com/uploadbyurl?url=<image>`
-through MrScraper, extract the generated `udm=48` Exact Match URL, fetch that
-URL, classify the HTML, and return the raw page.
+Request path: client to FastAPI, parse `imageUrl`, enter the concurrency
+limiter, fetch `https://lens.google.com/uploadbyurl?url=<image>` through
+MrScraper, extract the generated `udm=48` Exact Match URL, fetch that URL,
+classify the HTML, and return the raw page.
 
 Local HTTP probes against Google returned `403` pages, so live traffic goes
 through MrScraper's API-token HTML fetch mode. The application code owns the URL
@@ -161,7 +161,6 @@ The local side keeps a narrow set of controls:
 - Randomized local pacing from `REQUEST_DELAY_MIN_SECONDS` to
   `REQUEST_DELAY_MAX_SECONDS`.
 - A shared `httpx.AsyncClient` for provider requests.
-- A successful-response cache keyed by image URL.
 - HTML classification before success. CAPTCHA, Google sorry pages, Google
   errors, empty bodies, and ambiguous pages do not return `200`.
 
@@ -270,9 +269,6 @@ MAX_CONCURRENCY=16
 REQUEST_DELAY_MIN_SECONDS=0.0
 REQUEST_DELAY_MAX_SECONDS=0.25
 
-RESPONSE_CACHE_MAX_ENTRIES=512
-RESPONSE_CACHE_TTL_SECONDS=7200.0
-
 MRSCRAPER_BLOCK_RESOURCES=false
 USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 ```
@@ -319,16 +315,14 @@ Measurement artifacts are written under `.runtime/runs/lens-measure-*`.
 ## Optimization Notes
 
 Most request time is provider-side Google Lens fetch time. The local wins came
-from keeping enough upstream work in flight, avoiding repeated provider calls,
-and rejecting bad Google pages before they could count as successful API
-responses.
+from keeping enough upstream work in flight and rejecting bad Google pages
+before they could count as successful API responses.
 
 Selected runtime settings:
 
 - `MAX_CONCURRENCY=16` per API process.
 - `REQUEST_DELAY_MIN_SECONDS=0.0` and `REQUEST_DELAY_MAX_SECONDS=0.25`.
 - Shared process-scoped `httpx.AsyncClient` for provider requests.
-- Successful Exact Match response cache with in-flight duplicate coalescing.
 - `MRSCRAPER_BLOCK_RESOURCES=false`.
 - No MrScraper `geoCode` override.
 
@@ -340,7 +334,6 @@ Experiment history:
 | Concurrency 8 | See whether more upstream slots improved throughput without hurting validity. | Raised the in-process limiter to 8 and reused one process-scoped `httpx.AsyncClient` instead of creating a client per fetch path. | 84 requests, 84 valid, 0% errors, 49.02s avg, 59.36s max. | Rejected. Validity held, but latency moved right up against the 60s target. |
 | Concurrency 16 | Test whether a higher queue depth gave better observed hourly capacity. | Set `MAX_CONCURRENCY=16`; kept the shared client and the two-hop Lens/Exact Match flow unchanged. | 48 requests, 48 valid, 0% errors, 28.62s avg, 40.49s max. | Kept. Better throughput signal without sacrificing Exact Match validity. |
 | Low jitter | Remove local waiting that was not buying reliability. | Changed jitter defaults from 0.25-1.5s to `REQUEST_DELAY_MIN_SECONDS=0.0` and `REQUEST_DELAY_MAX_SECONDS=0.25`. | 18 requests, 18 valid, 0% errors, 22.22s avg, 26.48s max. | Kept. This was the cleanest latency win. |
-| Successful-response cache | Avoid spending provider calls on repeated image URLs and collapse duplicate in-flight misses. | Added `ExactMatchResponseCache`, keyed by image URL, with TTL/LRU storage and in-flight task coalescing. Only classified Exact Match HTML is cached. | Covered by deterministic cache tests; live load samples still report uncached first-hit behavior for unique URLs. | Kept. It reduces repeated-corpus cost without caching errors, CAPTCHA pages, or unknown HTML. |
 | Provider resource blocking | MrScraper exposes a resource-blocking hint; since this API returns HTML, blocking images/CSS/fonts looked plausible. | Added `MRSCRAPER_BLOCK_RESOURCES` and passed `blockResources=true` into the MrScraper API URL when enabled. | 18 requests, 18 valid, 0% errors, 49.26s avg, 76.13s max. | Rejected. It preserved validity but made the Lens flow slower. |
 | HTTPX pool tuning | Check whether matching the HTTP pool exactly to the 16-slot limiter improved queueing. | Changed pool limits to `max_connections=16`, `max_keepalive_connections=16`, and a longer keepalive expiry for the trial. | 18 requests, 18 valid, 0% errors, 25.66s avg, 32.29s max. | Rejected. The default `max(MAX_CONCURRENCY * 2, 20)` connection policy was faster. |
 | First-hop early cutoff | Saved Lens fixtures showed the `udm=48` link before the end of the first response, so streaming might avoid reading unnecessary HTML. | Tried streaming the Lens-entry response and stopping once the Exact Match link appeared, then fetching the extracted URL as usual. | 18 requests, 18 valid, 0% errors, 24.88s avg, 31.25s max. | Rejected. The cutoff fired, but the first provider hop had already taken most of the time. |
@@ -350,5 +343,4 @@ The most useful surprise was the early-cutoff result. I expected local HTML
 reading to matter because the first Lens page can be large. In live runs, the
 slow part had already happened before the Exact Match link arrived, and the
 second `udm=48` fetch was usually much faster. That pushed the optimization
-work toward concurrency, provider pacing, and avoiding duplicate upstream work
-instead of clever local parsing.
+work toward concurrency and provider pacing instead of clever local parsing.

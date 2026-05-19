@@ -15,6 +15,13 @@ class ImageUrl:
     Attributes:
         value: Normalized absolute HTTPS or HTTP URL string.
         parsed: Parsed URL components.
+
+    Example:
+        >>> image_url = ImageUrl.parse(" https://example.com/product.jpg ")
+        >>> image_url.value
+        'https://example.com/product.jpg'
+        >>> image_url.parsed.netloc
+        'example.com'
     """
 
     value: str
@@ -33,6 +40,10 @@ class ImageUrl:
         Raises:
             MalformedImageUrlError: If the value is empty, relative, missing a
                 host, or uses an unsupported scheme.
+
+        Example:
+            >>> ImageUrl.parse("http://example.com/a.png").parsed.scheme
+            'http'
         """
         value = raw_value.strip()
         if not value:
@@ -53,6 +64,10 @@ class ProviderApiToken:
 
     Attributes:
         value: Stripped provider token supplied by a trusted API caller.
+
+    Example:
+        >>> ProviderApiToken.parse_optional("  token-123  ")
+        ProviderApiToken(value='token-123')
     """
 
     value: str
@@ -66,6 +81,10 @@ class ProviderApiToken:
 
         Returns:
             Parsed token when a non-empty value is supplied; otherwise `None`.
+
+        Example:
+            >>> ProviderApiToken.parse_optional("   ") is None
+            True
         """
         if raw_value is None:
             return None
@@ -82,6 +101,11 @@ class ExactMatchHtml:
     Attributes:
         html: Raw HTML body returned to the API client.
         source_url: Final upstream URL that produced the HTML.
+
+    Example:
+        >>> response = ExactMatchHtml("<html>Exact matches</html>", "https://www.google.com/search?udm=48")
+        >>> response.source_url
+        'https://www.google.com/search?udm=48'
     """
 
     html: str

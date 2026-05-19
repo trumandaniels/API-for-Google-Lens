@@ -12,6 +12,11 @@ class AsyncConcurrencyLimiter:
 
     Args:
         max_concurrency: Maximum concurrent operations allowed.
+
+    Example:
+        >>> limiter = AsyncConcurrencyLimiter(1)
+        >>> hasattr(limiter, "slot")
+        True
     """
 
     def __init__(self, max_concurrency: int) -> None:
@@ -25,6 +30,15 @@ class AsyncConcurrencyLimiter:
 
         Yields:
             None while the caller owns the slot.
+
+        Example:
+            >>> import asyncio
+            >>> async def use_slot():
+            ...     limiter = AsyncConcurrencyLimiter(1)
+            ...     async with limiter.slot():
+            ...         return "acquired"
+            >>> asyncio.run(use_slot())
+            'acquired'
         """
         async with self._semaphore:
             yield

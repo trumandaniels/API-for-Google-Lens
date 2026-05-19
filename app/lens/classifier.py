@@ -8,7 +8,12 @@ import re
 
 
 class HtmlVerdict(StrEnum):
-    """Possible classifications for upstream Google HTML."""
+    """Possible classifications for upstream Google HTML.
+
+    Example:
+        >>> HtmlVerdict.EXACT_MATCH.value
+        'exact_match'
+    """
 
     EXACT_MATCH = "exact_match"
     BOT_BLOCK = "bot_block"
@@ -23,6 +28,10 @@ class HtmlClassification:
     Attributes:
         verdict: High-level response classification.
         reason: Short diagnostic reason suitable for logs and tests.
+
+    Example:
+        >>> HtmlClassification(HtmlVerdict.UNKNOWN, "missing markers").reason
+        'missing markers'
     """
 
     verdict: HtmlVerdict
@@ -81,6 +90,14 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
 
     Returns:
         Classification verdict and reason.
+
+    Example:
+        >>> result = classify_google_html(
+        ...     "<html>Exact matches Search Results</html>",
+        ...     "https://www.google.com/search?udm=48",
+        ... )
+        >>> result.verdict.value
+        'exact_match'
     """
     if not html.strip():
         return HtmlClassification(HtmlVerdict.UNKNOWN, "empty HTML body")

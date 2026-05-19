@@ -29,6 +29,10 @@ class DirectLensResponse:
         html: Upstream response body.
         final_url: Final URL after redirects.
         status_code: Upstream HTTP status code.
+
+    Example:
+        >>> DirectLensResponse("<html></html>", "https://www.google.com/search?udm=48", 200).status_code
+        200
     """
 
     html: str
@@ -48,6 +52,16 @@ class DirectLensClient:
         user_agent: User agent header.
         block_resources: Optional provider hint to block images, CSS, and
             fonts while rendering the target page.
+
+    Example:
+        >>> client = DirectLensClient(
+        ...     google_base_url="https://lens.google.com/uploadbyurl",
+        ...     timeout_seconds=10,
+        ...     user_agent="test-agent",
+        ...     mrscraper_api_key="token",
+        ... )
+        >>> client.mrscraper_api_url
+        'https://api.mrscraper.com'
     """
 
     google_base_url: str
@@ -68,6 +82,11 @@ class DirectLensClient:
         Returns:
             The caller-supplied token when present, otherwise the configured
             process token.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "default")
+            >>> client.resolve_mrscraper_api_key(ProviderApiToken("override"))
+            'override'
         """
         if token_override is not None:
             return token_override.value
@@ -87,6 +106,11 @@ class DirectLensClient:
             Browser-like request headers. The API token is included both in the
             MrScraper query string and the provider token header accepted by
             the service.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> client.build_request_headers()["x-api-token"]
+            'token'
         """
         api_key = self.resolve_mrscraper_api_key(token_override)
         return {
@@ -104,7 +128,20 @@ class DirectLensClient:
         }
 
     async def aclose(self) -> None:
-        """Close the owned process-scoped HTTP client, if one was provided."""
+        """Close the owned process-scoped HTTP client, if one was provided.
+
+        Example:
+            >>> import asyncio
+            >>> class FakeHttpClient:
+            ...     closed = False
+            ...     async def aclose(self):
+            ...         self.closed = True
+            >>> fake = FakeHttpClient()
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token", http_client=fake)
+            >>> asyncio.run(client.aclose())
+            >>> fake.closed
+            True
+        """
         if self.http_client is not None:
             await self.http_client.aclose()
 
@@ -123,6 +160,11 @@ class DirectLensClient:
             `google.com/search` page with `udm=26`. Adding `hl`, `gl`, or `udm`
             to the Lens entry URL caused Google 403 responses during prior live
             verification, so the entry URL stays minimal.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> client.build_lens_entry_url(ImageUrl.parse("https://example.com/a.jpg"))
+            'https://lens.google.com/uploadbyurl?url=https%3A%2F%2Fexample.com%2Fa.jpg'
         """
         query = urlencode(
             {
@@ -140,6 +182,11 @@ class DirectLensClient:
         Returns:
             Google Lens entry URL. Exact Match is reached after Google creates
             a Search session for this image.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> client.build_exact_match_url(ImageUrl.parse("https://example.com/a.jpg")).startswith("https://lens.google.com/uploadbyurl?")
+            True
         """
         return self.build_lens_entry_url(image_url)
 
@@ -154,6 +201,11 @@ class DirectLensClient:
             Search URL with `udm=48`, Google's Exact Match tab parameter.
             Non-Google or non-query URLs are returned with the same path and
             query parameters except for the `udm` value.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> client.build_exact_match_tab_url("https://www.google.com/search?q=x&udm=26")
+            'https://www.google.com/search?q=x&udm=48'
         """
         parsed = urlparse(search_url)
         query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
@@ -178,6 +230,12 @@ class DirectLensClient:
         Returns:
             Absolute Google Search URL for the Exact Match tab, or `None` when
             the tab link is not present.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> html = '<a href="/search?q=shirt&amp;udm=48">Exact matches</a>'
+            >>> client.find_exact_match_tab_url(html)
+            'https://www.google.com/search?q=shirt&udm=48'
         """
         match = re.search(
             r'href="(?P<href>[^"]*?(?:[?&]|&amp;)udm=48[^"]*?)"',
@@ -206,6 +264,12 @@ class DirectLensClient:
         Raises:
             ValueError: If this client was not configured with a MrScraper API
                 key.
+
+        Example:
+            >>> client = DirectLensClient("https://lens.google.com/uploadbyurl", 10, "ua", "token")
+            >>> url = client.build_mrscraper_api_url("https://www.google.com/search?udm=48")
+            >>> "html=true" in url and "url=https%3A%2F%2Fwww.google.com" in url
+            True
         """
         api_key = self.resolve_mrscraper_api_key(token_override)
         if not api_key:
@@ -239,6 +303,27 @@ class DirectLensClient:
         Raises:
             UpstreamTimeoutError: If the upstream request times out.
             UpstreamRequestError: If the upstream request fails.
+
+        Example:
+            >>> import asyncio
+            >>> class FakeResponse:
+            ...     status_code = 200
+            ...     text = "<html>Exact matches Search Results</html>"
+            ...     content = text.encode("utf-8")
+            ...     http_version = "HTTP/1.1"
+            >>> class FakeHttpClient:
+            ...     async def get(self, url, headers):
+            ...         return FakeResponse()
+            >>> client = DirectLensClient(
+            ...     "https://lens.google.com/uploadbyurl",
+            ...     10,
+            ...     "ua",
+            ...     "token",
+            ...     http_client=FakeHttpClient(),
+            ... )
+            >>> result = asyncio.run(client.fetch_exact_match_html(ImageUrl.parse("https://example.com/a.jpg")))
+            >>> result.status_code
+            200
         """
         import httpx
 

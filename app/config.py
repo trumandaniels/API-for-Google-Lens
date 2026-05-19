@@ -6,7 +6,6 @@ stored as a typed value before it reaches request handling code.
 
 from __future__ import annotations
 
-from functools import lru_cache
 import os
 from pathlib import Path
 
@@ -19,8 +18,6 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_CONCURRENCY = 16
 DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.0
 DEFAULT_REQUEST_DELAY_MAX_SECONDS = 0.25
-DEFAULT_RESPONSE_CACHE_MAX_ENTRIES = 512
-DEFAULT_RESPONSE_CACHE_TTL_SECONDS = 7200.0
 DEFAULT_MRSCRAPER_BLOCK_RESOURCES = False
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -38,10 +35,6 @@ class Settings(BaseModel):
         max_concurrency: Maximum in-process concurrent upstream requests.
         request_delay_min_seconds: Minimum randomized delay before upstream requests.
         request_delay_max_seconds: Maximum randomized delay before upstream requests.
-        response_cache_max_entries: Maximum process-local successful Exact Match
-            responses cached by normalized image URL.
-        response_cache_ttl_seconds: Maximum cache age for successful Exact Match
-            responses.
         user_agent: User agent sent to Google.
         mrscraper_api_key: Required MrScraper Scraper API token.
         mrscraper_api_url: MrScraper Scraper API endpoint.
@@ -50,6 +43,11 @@ class Settings(BaseModel):
             because the measured Lens path was slower with it enabled.
         log_level: Minimum application log level. Set LOG_LEVEL=DEBUG for
             local diagnostics; keep production at INFO or higher.
+
+    Example:
+        >>> settings = Settings(mrscraper_api_key="token")
+        >>> settings.google_base_url
+        'https://lens.google.com/uploadbyurl'
     """
 
     google_base_url: str = Field(default=DEFAULT_GOOGLE_BASE_URL)
@@ -58,14 +56,6 @@ class Settings(BaseModel):
     max_concurrency: int = Field(default=DEFAULT_MAX_CONCURRENCY, gt=0)
     request_delay_min_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MIN_SECONDS, ge=0)
     request_delay_max_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MAX_SECONDS, ge=0)
-    response_cache_max_entries: int = Field(
-        default=DEFAULT_RESPONSE_CACHE_MAX_ENTRIES,
-        ge=0,
-    )
-    response_cache_ttl_seconds: float = Field(
-        default=DEFAULT_RESPONSE_CACHE_TTL_SECONDS,
-        ge=0,
-    )
     user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
     mrscraper_api_key: str
     mrscraper_api_url: str = Field(default=DEFAULT_MRSCRAPER_API_URL)
@@ -84,6 +74,10 @@ class Settings(BaseModel):
 
         Raises:
             ValueError: If the level is not one of Python standard levels.
+
+        Example:
+            >>> Settings.parse_log_level(" debug ")
+            'DEBUG'
         """
         normalized = value.strip().upper()
         if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -105,6 +99,10 @@ class Settings(BaseModel):
 
         Raises:
             ValueError: If the URL is not an HTTPS URL.
+
+        Example:
+            >>> Settings.require_https_google_url("https://lens.google.com/uploadbyurl?")
+            'https://lens.google.com/uploadbyurl'
         """
         if not value.startswith("https://"):
             raise ValueError("google_base_url must be an HTTPS URL")
@@ -123,6 +121,10 @@ class Settings(BaseModel):
 
         Raises:
             ValueError: If the token is empty.
+
+        Example:
+            >>> Settings.require_mrscraper_api_key(" token ")
+            'token'
         """
         stripped = value.strip()
         if not stripped:
@@ -142,6 +144,10 @@ class Settings(BaseModel):
 
         Raises:
             ValueError: If the URL is not an HTTPS URL.
+
+        Example:
+            >>> Settings.require_https_mrscraper_api_url("https://api.mrscraper.com?")
+            'https://api.mrscraper.com'
         """
         stripped = value.strip()
         if not stripped.startswith("https://"):
@@ -157,6 +163,11 @@ class Settings(BaseModel):
 
         Raises:
             ValueError: If the maximum delay is lower than the minimum delay.
+
+        Example:
+            >>> settings = Settings(mrscraper_api_key="token", request_delay_min_seconds=0.1, request_delay_max_seconds=0.1)
+            >>> settings.require_valid_delay_range() is settings
+            True
         """
         if self.request_delay_max_seconds < self.request_delay_min_seconds:
             raise ValueError(
@@ -177,6 +188,10 @@ def parse_settings(environ: dict[str, str]) -> Settings:
 
     Raises:
         ValidationError: If environment values cannot be parsed into settings.
+
+    Example:
+        >>> parse_settings({"MRSCRAPER_API_KEY": " token "}).mrscraper_api_key
+        'token'
     """
     return Settings(
         google_base_url=environ.get("GOOGLE_BASE_URL", DEFAULT_GOOGLE_BASE_URL),
@@ -199,14 +214,6 @@ def parse_settings(environ: dict[str, str]) -> Settings:
             "REQUEST_DELAY_MAX_SECONDS",
             str(DEFAULT_REQUEST_DELAY_MAX_SECONDS),
         ),
-        response_cache_max_entries=environ.get(
-            "RESPONSE_CACHE_MAX_ENTRIES",
-            str(DEFAULT_RESPONSE_CACHE_MAX_ENTRIES),
-        ),
-        response_cache_ttl_seconds=environ.get(
-            "RESPONSE_CACHE_TTL_SECONDS",
-            str(DEFAULT_RESPONSE_CACHE_TTL_SECONDS),
-        ),
         user_agent=environ.get("USER_AGENT", DEFAULT_USER_AGENT),
         mrscraper_block_resources=environ.get(
             "MRSCRAPER_BLOCK_RESOURCES",
@@ -228,6 +235,15 @@ def parse_env_file(path: Path) -> dict[str, str]:
         This parser intentionally supports only the simple dotenv subset used by
         this project: comments, blank lines, optional `export`, whitespace
         around `=`, and single- or double-quoted values.
+
+    Example:
+        >>> from pathlib import Path
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmp:
+        ...     path = Path(tmp) / ".env"
+        ...     _ = path.write_text("export MRSCRAPER_API_KEY='token'\n", encoding="utf-8")
+        ...     parse_env_file(path)
+        {'MRSCRAPER_API_KEY': 'token'}
     """
     if not path.exists():
         return {}
@@ -255,15 +271,18 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return cached process settings.
+    """Return parsed process settings.
 
     Returns:
         Settings parsed from `os.environ`.
 
     Raises:
         ValidationError: If process environment values are invalid.
+
+    Example:
+        >>> parse_settings({"MRSCRAPER_API_KEY": "token"}).mrscraper_api_key
+        'token'
     """
     try:
         merged_environ = {**parse_env_file(Path(".env")), **os.environ}
