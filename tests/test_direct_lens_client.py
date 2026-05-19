@@ -146,6 +146,29 @@ class DirectLensClientTests(unittest.TestCase):
         self.assertEqual(parsed.netloc, "www.google.com")
         self.assertEqual(query["udm"], ["48"])
 
+    def test_finds_exact_match_tab_url_without_english_label(self) -> None:
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_example",
+        )
+        html = (
+            '<a class="C6AK7c" '
+            'href="/search?sca_esv=abc&amp;lns_surface=26&amp;udm=48&amp;vsrid=xyz">'
+            '<div aria-current="false" class="mXwfNd">'
+            '<span class="R1QWuf">Kecocokan persis</span></div></a>'
+        )
+
+        exact_url = client.find_exact_match_tab_url(html)
+
+        self.assertIsNotNone(exact_url)
+        assert exact_url is not None
+        parsed = urlparse(exact_url)
+        query = parse_qs(parsed.query)
+        self.assertEqual(parsed.netloc, "www.google.com")
+        self.assertEqual(query["udm"], ["48"])
+
     def test_mrscraper_api_key_is_required_for_api_url_builder(self) -> None:
         client = DirectLensClient(
             google_base_url="https://lens.google.com/uploadbyurl",

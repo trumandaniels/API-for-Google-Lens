@@ -76,6 +76,7 @@ review. When that happens, retry the same request with your own MrScraper API
 key:
 
 ```bash
+# health-check: curl --version
 curl \
   -H "X-MrScraper-Api-Key: atk_your_mrscraper_api_key" \
   "$HOST/google-lens?imageUrl=$IMAGE"
@@ -115,20 +116,36 @@ The local side keeps a narrow set of controls:
 Requirements:
 
 - Python 3.12+
-- `uv` or `pip`
+- `uv` for the preferred setup path, or `pip` for the standard-library setup
+  path
 - A MrScraper API token for live Lens requests
 
-Install:
+Install with `uv`:
 
 ```bash
-python3 -m venv .venv
+# health-check: uv --version
+uv venv --python 3.12 .venv
+# health-check: test -f .venv/bin/activate
 source .venv/bin/activate
+# health-check: uv --version
+uv pip install -e ".[dev]"
+```
+
+Install with `pip`:
+
+```bash
+# health-check: python3 --version
+python3 -m venv .venv
+# health-check: test -f .venv/bin/activate
+source .venv/bin/activate
+# health-check: python3 -m pip --version
 python3 -m pip install -e ".[dev]"
 ```
 
 Configure:
 
 ```bash
+# health-check: test -f .env.example
 cp .env.example .env
 ```
 
@@ -137,7 +154,9 @@ Set `MRSCRAPER_API_KEY` in `.env` or in the process environment.
 Run:
 
 ```bash
+# health-check: test -f .venv/bin/activate
 source .venv/bin/activate
+# health-check: python3 -c "import app.main; app.main.create_app()"
 uvicorn app.main:app --reload
 ```
 
@@ -146,7 +165,9 @@ Quick local request:
 ```bash
 IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
 
+# health-check: curl --version
 curl 'http://127.0.0.1:8000/healthz'
+# health-check: curl --version
 curl "http://127.0.0.1:8000/google-lens?imageUrl=$IMAGE"
 ```
 
@@ -155,7 +176,7 @@ curl "http://127.0.0.1:8000/google-lens?imageUrl=$IMAGE"
 Copy `.env.example` to `.env` and set `MRSCRAPER_API_KEY`. The rest can stay on
 the submitted defaults unless you are re-running load tests.
 
-```bash
+```dotenv
 MRSCRAPER_API_KEY=atk_your_mrscraper_api_key
 MRSCRAPER_API_URL=https://api.mrscraper.com
 
@@ -181,21 +202,32 @@ matching `.env` values.
 Local checks:
 
 ```bash
+# health-check: python3 -m unittest --help
 python3 -m unittest discover -s tests -p 'test_*.py'
+# health-check: python3 -m compileall --help
 python3 -m compileall -q app tests scripts
 ```
 
 Small hosted measurement:
 
-Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url "$IMAGE" --requests 5 --concurrency 2 --min-valid-exact 1 --max-average-latency-seconds 60 --max-error-rate 0.5`.
+```bash
+# health-check: python3 scripts/measure_lens_api.py --help
+python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url "$IMAGE" --requests 5 --concurrency 2 --min-valid-exact 1 --max-average-latency-seconds 60 --max-error-rate 0.5
+```
 
 167-request load estimate:
 
-Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 167 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516`.
+```bash
+# health-check: python3 scripts/measure_lens_api.py --help
+python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 167 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516
+```
 
 Full one-hour profile:
 
-Use `python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 1000 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516 --target challenge`.
+```bash
+# health-check: python3 scripts/measure_lens_api.py --help
+python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 1000 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516 --target challenge
+```
 
 Measurement artifacts are written under `.runtime/runs/lens-measure-*`.
 

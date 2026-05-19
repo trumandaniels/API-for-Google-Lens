@@ -179,7 +179,11 @@ class DirectLensClient:
             Absolute Google Search URL for the Exact Match tab, or `None` when
             the tab link is not present.
         """
-        match = re.search(r'href="(?P<href>[^"]*?udm=48[^"]*?)"[^>]*>.*?Exact matches', html, re.DOTALL)
+        match = re.search(
+            r'href="(?P<href>[^"]*?(?:[?&]|&amp;)udm=48[^"]*?)"',
+            html,
+            re.DOTALL,
+        )
         if match is None:
             return None
         return urljoin("https://www.google.com", unescape(match.group("href")))

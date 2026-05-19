@@ -50,6 +50,21 @@ EXACT_MATCH_MARKERS = (
     "Search Results",
 )
 
+EXACT_MATCH_TAB_LABELS = frozenset(
+    {
+        "exact matches",
+        "kecocokan persis",
+    }
+)
+
+NON_EXACT_SELECTED_TAB_LABELS = frozenset(
+    {
+        "all",
+        "semua",
+        "visual matches",
+    }
+)
+
 SELECTED_TAB_PATTERN = re.compile(
     r'aria-current="page"[^>]*selected[^>]*class="mXwfNd"[^>]*>\s*'
     r'<span[^>]*class="R1QWuf"[^>]*>(?P<label>[^<]+)</span>',
@@ -83,9 +98,9 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     selected_tab = SELECTED_TAB_PATTERN.search(html)
     if selected_tab is not None:
         label = selected_tab.group("label").strip().lower()
-        if label == "exact matches":
+        if label in EXACT_MATCH_TAB_LABELS:
             return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match tab selected")
-        if label in {"all", "visual matches"}:
+        if label in NON_EXACT_SELECTED_TAB_LABELS:
             return HtmlClassification(HtmlVerdict.UNKNOWN, f"{label.title()} tab selected")
 
     if "udm=48" in lower_url and "exact matches" in html.lower() and "search results" in html.lower():

@@ -24,6 +24,16 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
 
         self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
 
+    def test_detects_localized_selected_exact_match_tab(self) -> None:
+        html = (
+            '<div aria-current="page" selected="" class="mXwfNd">'
+            '<span class="R1QWuf">Kecocokan persis</span></div>'
+        )
+
+        classification = classify_google_html(html)
+
+        self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
+
     def test_fixture_all_tab_pages_are_not_exact_match_success(self) -> None:
         fixture_dir = Path(__file__).parent / "fixtures" / "google_lens"
         for fixture_path in fixture_dir.glob("google-search-*.html"):
