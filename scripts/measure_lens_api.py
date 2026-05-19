@@ -37,7 +37,6 @@ import argparse
 import asyncio
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 import math
 import os
@@ -50,11 +49,18 @@ from urllib.parse import urljoin
 
 from app.config import parse_env_file
 from app.lens.classifier import HtmlVerdict, classify_google_html
+from app.observability import (
+    configure_logging,
+    get_measurement_logger,
+    hash_url,
+    log_measurement_result,
+)
 
 CHALLENGE_MIN_VALID_EXACT = 300
 CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS = 60.0
 CHALLENGE_MAX_ERROR_RATE = 0.10
 FIVE_MINUTE_PROJECTION_MULTIPLIER = 12.0
+LOGGER = get_measurement_logger()
 
 
 @dataclass(frozen=True)
@@ -106,19 +112,6 @@ def safe_timestamp() -> str:
     """Return a timestamp safe for directory names."""
 
     return utc_timestamp().replace(":", "-").replace(".", "-")
-
-
-def hash_url(url: str) -> str:
-    """Return a short stable hash for a URL.
-
-    Args:
-        url: Image URL that should not be stored verbatim in artifacts.
-
-    Returns:
-        First 16 hex characters of the URL SHA-256 digest.
-    """
-
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
 
 
 def load_image_urls(image_urls: list[str], image_url_file: Path | None) -> list[str]:
@@ -497,6 +490,7 @@ async def run_measurement(
                     request_headers,
                 )
                 results.append(result)
+                log_measurement_result(result)
 
         tasks: list[asyncio.Task[None]] = []
         for index in range(request_count):
@@ -632,6 +626,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print sanitized per-request progress and run diagnostics.",
+    )
+    parser.add_argument(
         "--randomize-image-urls",
         action="store_true",
         help=(
@@ -766,6 +765,7 @@ async def async_main() -> int:
     """Run measurement and write artifacts."""
 
     args = parse_args()
+    configure_logging(args.verbose)
     repo_root = Path(__file__).resolve().parent.parent
     merged_environ = {**parse_env_file(repo_root / ".env"), **os.environ}
     request_headers = resolve_request_headers(args.mrscraper_api_key_env, merged_environ)
@@ -783,6 +783,18 @@ async def async_main() -> int:
 
     started_at = utc_timestamp()
     wall_started = time.perf_counter()
+    LOGGER.info(
+        (
+            "measurement_started base_url=%s requests=%s concurrency=%s "
+            "rate_per_minute=%s timeout_seconds=%.1f output_dir=%s"
+        ),
+        args.base_url,
+        args.requests,
+        args.concurrency,
+        args.rate_per_minute,
+        args.timeout_seconds,
+        output_dir,
+    )
     results = await run_measurement(
         base_url=args.base_url,
         image_url_schedule=image_url_schedule,
@@ -817,6 +829,7 @@ async def async_main() -> int:
         "startedAt": started_at,
         "target": args.target,
         "timeoutSeconds": args.timeout_seconds,
+        "verbose": args.verbose,
     }
     artifact = {
         "run": run_config,
@@ -842,6 +855,14 @@ async def async_main() -> int:
 
     print(f"Measurement artifacts: {output_dir}")
     print(json.dumps(summary["metrics"], indent=2))
+    LOGGER.info(
+        "measurement_finished passed=%s valid_exact_match=%s error_rate=%.3f "
+        "average_latency_seconds=%.3f",
+        summary["passed"],
+        summary["metrics"]["validExactMatchCount"],
+        summary["metrics"]["errorRate"],
+        summary["metrics"]["averageLatencySeconds"],
+    )
     if summary["passed"] is False:
         return 1
     return 0

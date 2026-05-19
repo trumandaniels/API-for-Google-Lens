@@ -143,6 +143,54 @@ class ApiLifecycleTests(unittest.TestCase):
         assert counting_client.last_token_override is not None
         self.assertEqual(counting_client.last_token_override.value, "atk_request")
 
+    def test_route_logs_regular_request_without_raw_image_url(self) -> None:
+        settings = parse_settings(
+            {
+                "MRSCRAPER_API_KEY": "atk_example",
+                "REQUEST_DELAY_MIN_SECONDS": "0",
+                "REQUEST_DELAY_MAX_SECONDS": "0",
+            }
+        )
+        app = create_app(settings=settings)
+        counting_client = CountingLensClient()
+        image_url = "https://example.com/private/image.jpg?token=secret"
+
+        with TestClient(app) as client:
+            app.state.lens_service = GoogleLensService(
+                client=counting_client,  # type: ignore[arg-type]
+                limiter=AsyncConcurrencyLimiter(settings.max_concurrency),
+                request_delay_min_seconds=0,
+                request_delay_max_seconds=0,
+            )
+            with self.assertLogs("uvicorn.error", level="INFO") as logs:
+                response = client.get("/google-lens", params={"imageUrl": image_url})
+
+        joined_logs = "\n".join(logs.output)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("lens_api_request_started", joined_logs)
+        self.assertIn("lens_api_request_completed", joined_logs)
+        self.assertIn("image_url_hash=", joined_logs)
+        self.assertIn("source_url_has_udm_48=True", joined_logs)
+        self.assertNotIn(image_url, joined_logs)
+
+    def test_route_logs_regular_request_failure(self) -> None:
+        settings = parse_settings({"MRSCRAPER_API_KEY": "atk_example"})
+        app = create_app(settings=settings)
+
+        with TestClient(app) as client:
+            with self.assertLogs("uvicorn.error", level="WARNING") as logs:
+                response = client.get(
+                    "/google-lens",
+                    params={"imageUrl": "not-a-url"},
+                )
+
+        joined_logs = "\n".join(logs.output)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("lens_api_request_failed", joined_logs)
+        self.assertIn("status=400", joined_logs)
+        self.assertIn("error_type=MalformedImageUrlError", joined_logs)
+        self.assertIn("image_url_hash=unparsed", joined_logs)
+
 
 if __name__ == "__main__":
     unittest.main()

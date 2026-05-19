@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import unescape
-import logging
 import re
 import time
 from typing import Any
@@ -17,8 +16,9 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from app.errors import UpstreamRequestError, UpstreamTimeoutError
 from app.models import ImageUrl, ProviderApiToken
+from app.observability import get_api_logger
 
-LOGGER = logging.getLogger("uvicorn.error")
+LOGGER = get_api_logger()
 
 
 @dataclass(frozen=True)

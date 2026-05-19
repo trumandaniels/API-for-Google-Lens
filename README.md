@@ -55,13 +55,47 @@ Endpoint: `GET /google-lens?imageUrl=<public_image_url>`.
 
 Example:
 
-Set `HOST` to the hosted API above. Set `IMAGE` to any public image URL. Then
-run `curl "$HOST/google-lens?imageUrl=$IMAGE"`.
+Set `HOST` to the hosted API above and `IMAGE` to any public image URL.
+
+```bash
+# health-check: curl --version
+curl "$HOST/google-lens?imageUrl=$IMAGE"
+```
 
 Success:
 
 The success response is `200 OK` with `Content-Type: text/html`. The body is
 the raw Google Lens Exact Match HTML.
+
+## Viewing Retrieved HTML
+
+To view the retrieved page directly, start the API and open the endpoint URL in
+a browser. The API response is the page: `GET /google-lens` returns the
+retrieved Exact Match HTML as `text/html`.
+
+```text
+http://127.0.0.1:8000/google-lens?imageUrl=<url-encoded-public-image-url>
+```
+
+For repeatable inspection, save the response under `.runtime/` and open the
+saved HTML file. `curl --get --data-urlencode` handles image URLs that contain
+characters like `?`, `&`, or `$`.
+
+```bash
+IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+
+# health-check: mkdir --help
+mkdir -p .runtime/pages
+# health-check: curl --version
+curl --get \
+  --data-urlencode "imageUrl=$IMAGE" \
+  http://127.0.0.1:8000/google-lens \
+  -o .runtime/pages/latest-google-lens.html
+```
+
+Opening the API URL in a browser is usually the most faithful view. A saved
+Google HTML file can be useful for debugging, but some relative assets and
+scripts may not hydrate from a local file.
 
 Errors are mapped explicitly:
 

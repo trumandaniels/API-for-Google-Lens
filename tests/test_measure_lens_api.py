@@ -5,6 +5,7 @@ from argparse import Namespace
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "measure_lens_api.py"
@@ -98,6 +99,40 @@ class MeasureLensApiTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(set(first[:3]), set(image_urls))
+
+    def test_parse_args_accepts_verbose_flag(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "measure_lens_api.py",
+                "--image-url",
+                "https://example.com/image.jpg",
+                "--verbose",
+            ],
+        ):
+            args = measure_lens_api.parse_args()
+
+        self.assertTrue(args.verbose)
+
+    def test_verbose_result_log_uses_image_url_hash(self) -> None:
+        raw_url = "https://example.com/private-image.jpg"
+        result = measure_lens_api.MeasurementResult(
+            index=3,
+            image_url_hash=measure_lens_api.hash_url(raw_url),
+            status_code=200,
+            latency_seconds=1.25,
+            verdict="valid_exact_match",
+            html_verdict="exact_match",
+        )
+
+        with self.assertLogs("measure_lens_api", level="INFO") as captured:
+            measure_lens_api.log_measurement_result(result)
+
+        output = "\n".join(captured.output)
+        self.assertIn("request_completed index=3", output)
+        self.assertIn(result.image_url_hash, output)
+        self.assertNotIn(raw_url, output)
 
     def test_summarizes_metrics_and_threshold_checks(self) -> None:
         results = [

@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from app.errors import LensApiError, to_http_error
 from app.lens.service import GoogleLensService
 from app.models import ImageUrl, ProviderApiToken
+from app.observability import (
+    UNPARSED_IMAGE_URL_HASH,
+    get_api_logger,
+    hash_url as hash_image_url,
+    log_lens_api_request_completed,
+    log_lens_api_request_failed,
+    log_lens_api_request_started,
+)
 
 router = APIRouter()
+LOGGER = get_api_logger()
 
 
 def get_lens_service(request: Request) -> GoogleLensService:
@@ -61,12 +72,34 @@ async def google_lens(
         HTTPException: Returned when input parsing, upstream fetching, or
             response classification fails.
     """
+    started = time.perf_counter()
+    image_url_hash = UNPARSED_IMAGE_URL_HASH
+    token_override = ProviderApiToken.parse_optional(mrscraper_api_key)
+    token_override_present = token_override is not None
+
     try:
         parsed_url = ImageUrl.parse(imageUrl)
-        token_override = ProviderApiToken.parse_optional(mrscraper_api_key)
+        image_url_hash = hash_image_url(parsed_url.value)
+        log_lens_api_request_started(LOGGER, image_url_hash, token_override_present)
         result = await service.fetch_exact_match_html(parsed_url, token_override)
     except LensApiError as error:
         http_error = to_http_error(error)
+        log_lens_api_request_failed(
+            LOGGER,
+            image_url_hash,
+            http_error.status_code,
+            type(error).__name__,
+            (time.perf_counter() - started) * 1000,
+            token_override_present,
+        )
         raise HTTPException(status_code=http_error.status_code, detail=http_error.detail) from error
 
+    log_lens_api_request_completed(
+        LOGGER,
+        image_url_hash,
+        (time.perf_counter() - started) * 1000,
+        len(result.html.encode("utf-8")),
+        "udm=48" in result.source_url,
+        token_override_present,
+    )
     return HTMLResponse(content=result.html, status_code=200)
