@@ -31,6 +31,12 @@ def get_lens_service(request: Request) -> GoogleLensService:
 
     Returns:
         Shared service configured during application startup.
+
+    Example:
+        >>> from types import SimpleNamespace
+        >>> request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(lens_service="service")))
+        >>> get_lens_service(request)
+        'service'
     """
     return request.app.state.lens_service
 
@@ -41,6 +47,11 @@ async def healthz() -> dict[str, str]:
 
     Returns:
         JSON object indicating that the process is responsive.
+
+    Example:
+        >>> import asyncio
+        >>> asyncio.run(healthz())
+        {'status': 'ok'}
     """
     return {"status": "ok"}
 
@@ -71,6 +82,16 @@ async def google_lens(
     Raises:
         HTTPException: Returned when input parsing, upstream fetching, or
             response classification fails.
+
+    Example:
+        >>> import asyncio
+        >>> from app.models import ExactMatchHtml
+        >>> class FakeService:
+        ...     async def fetch_exact_match_html(self, image_url, token_override=None):
+        ...         return ExactMatchHtml("<html>Exact matches</html>", "https://www.google.com/search?udm=48")
+        >>> response = asyncio.run(google_lens("https://example.com/a.jpg", mrscraper_api_key=None, service=FakeService()))
+        >>> response.status_code
+        200
     """
     started = time.perf_counter()
     image_url_hash = UNPARSED_IMAGE_URL_HASH

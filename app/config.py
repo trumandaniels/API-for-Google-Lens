@@ -241,7 +241,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
         >>> import tempfile
         >>> with tempfile.TemporaryDirectory() as tmp:
         ...     path = Path(tmp) / ".env"
-        ...     _ = path.write_text("export MRSCRAPER_API_KEY='token'\n", encoding="utf-8")
+        ...     _ = path.write_text("export MRSCRAPER_API_KEY='token'\\n", encoding="utf-8")
         ...     parse_env_file(path)
         {'MRSCRAPER_API_KEY': 'token'}
     """

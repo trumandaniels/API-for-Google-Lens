@@ -24,6 +24,18 @@ class MeasurementLogResult(Protocol):
         verdict: Aggregate verdict label.
         html_verdict: HTML classifier verdict label.
         error: Short failure detail, if any.
+
+    Example:
+        >>> class Result:
+        ...     index = 0
+        ...     image_url_hash = "abc123"
+        ...     status_code = 200
+        ...     latency_seconds = 0.1
+        ...     verdict = "ok"
+        ...     html_verdict = "exact_match"
+        ...     error = None
+        >>> Result().verdict
+        'ok'
     """
 
     index: int
@@ -40,6 +52,10 @@ def get_api_logger() -> logging.Logger:
 
     Returns:
         Logger attached to Uvicorn's error log stream.
+
+    Example:
+        >>> get_api_logger().name
+        'uvicorn.error'
     """
 
     return logging.getLogger(API_LOGGER_NAME)
@@ -50,6 +66,10 @@ def get_measurement_logger() -> logging.Logger:
 
     Returns:
         Logger dedicated to `scripts/measure_lens_api.py`.
+
+    Example:
+        >>> get_measurement_logger().name
+        'measure_lens_api'
     """
 
     return logging.getLogger(MEASUREMENT_LOGGER_NAME)
@@ -65,6 +85,12 @@ def configure_logging(
         verbose: Whether to emit per-request progress logs.
         logger: Optional logger to set to the resolved level. When omitted,
             the measurement CLI logger is configured.
+
+    Example:
+        >>> logger = logging.getLogger("docstring.configure_logging")
+        >>> configure_logging(verbose=True, logger=logger)
+        >>> logger.level == logging.INFO
+        True
     """
 
     log_level = logging.INFO if verbose else logging.WARNING
@@ -80,6 +106,10 @@ def hash_url(url: str) -> str:
 
     Returns:
         First 16 hex characters of the URL SHA-256 digest.
+
+    Example:
+        >>> len(hash_url("https://example.com/image.jpg"))
+        16
     """
 
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
@@ -97,6 +127,12 @@ def log_lens_api_request_started(
         image_url_hash: Sanitized image URL hash.
         token_override_present: Whether the caller supplied a provider token
             override header.
+
+    Example:
+        >>> logger = logging.getLogger("docstring.started")
+        >>> logger.handlers[:] = [logging.NullHandler()]
+        >>> logger.propagate = False
+        >>> log_lens_api_request_started(logger, "abc123", False)
     """
 
     logger.info(
@@ -125,6 +161,12 @@ def log_lens_api_request_failed(
         elapsed_ms: Request duration in milliseconds.
         token_override_present: Whether the caller supplied a provider token
             override header.
+
+    Example:
+        >>> logger = logging.getLogger("docstring.failed")
+        >>> logger.handlers[:] = [logging.NullHandler()]
+        >>> logger.propagate = False
+        >>> log_lens_api_request_failed(logger, "abc123", 400, "MalformedImageUrlError", 1.0, False)
     """
 
     logger.warning(
@@ -159,6 +201,12 @@ def log_lens_api_request_completed(
             like the Exact Match tab.
         token_override_present: Whether the caller supplied a provider token
             override header.
+
+    Example:
+        >>> logger = logging.getLogger("docstring.completed")
+        >>> logger.handlers[:] = [logging.NullHandler()]
+        >>> logger.propagate = False
+        >>> log_lens_api_request_completed(logger, "abc123", 1.0, 128, True, False)
     """
 
     logger.info(
@@ -187,6 +235,20 @@ def log_measurement_result(
             details that may contain provider diagnostics.
         logger: Optional destination logger. When omitted, the measurement CLI
             logger is used.
+
+    Example:
+        >>> class Result:
+        ...     index = 0
+        ...     image_url_hash = "abc123"
+        ...     status_code = 200
+        ...     latency_seconds = 0.1
+        ...     verdict = "ok"
+        ...     html_verdict = "exact_match"
+        ...     error = None
+        >>> logger = logging.getLogger("docstring.measurement")
+        >>> logger.handlers[:] = [logging.NullHandler()]
+        >>> logger.propagate = False
+        >>> log_measurement_result(Result(), logger)
     """
 
     (logger or get_measurement_logger()).info(

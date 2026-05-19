@@ -29,6 +29,12 @@ def configure_application_logging(settings: Settings) -> None:
 
     Args:
         settings: Parsed process settings containing the configured log level.
+
+    Example:
+        >>> settings = Settings(mrscraper_api_key="token", log_level="DEBUG")
+        >>> configure_application_logging(settings)
+        >>> logging.getLogger("app").level == logging.DEBUG
+        True
     """
 
     level = getattr(logging, settings.log_level)
@@ -44,6 +50,14 @@ def build_lens_service(settings: Settings) -> GoogleLensService:
 
     Returns:
         Service with shared client configuration and concurrency limiter.
+
+    Example:
+        >>> import asyncio
+        >>> settings = Settings(mrscraper_api_key="token")
+        >>> service = build_lens_service(settings)
+        >>> isinstance(service, GoogleLensService)
+        True
+        >>> asyncio.run(service.aclose())
     """
     limiter = AsyncConcurrencyLimiter(settings.max_concurrency)
     headers = {
@@ -84,6 +98,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     Returns:
         Configured FastAPI application with challenge routes registered.
+
+    Example:
+        >>> settings = Settings(mrscraper_api_key="token")
+        >>> application = create_app(settings)
+        >>> application.title
+        'Google Lens Exact Match API'
     """
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
