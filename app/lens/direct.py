@@ -265,7 +265,7 @@ class DirectLensClient:
                         trust_env=False,
                     ) as client:
                         response = await client.get(url, headers=request_headers)
-                LOGGER.info(
+                LOGGER.debug(
                     "lens_provider_hop hop=%s status=%s elapsed_ms=%.0f "
                     "bytes=%s http_version=%s",
                     hop_name,

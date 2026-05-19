@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
 
 import httpx
 from fastapi import FastAPI
@@ -18,6 +19,21 @@ from app.api import router
 from app.config import Settings, get_settings
 from app.lens.service import GoogleLensService
 from app.throttling import AsyncConcurrencyLimiter
+
+
+APPLICATION_LOGGER_NAMES = ("uvicorn.error", "app")
+
+
+def configure_application_logging(settings: Settings) -> None:
+    """Apply parsed application log level to app-owned loggers.
+
+    Args:
+        settings: Parsed process settings containing the configured log level.
+    """
+
+    level = getattr(logging, settings.log_level)
+    for logger_name in APPLICATION_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(level)
 
 
 def build_lens_service(settings: Settings) -> GoogleLensService:
@@ -73,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         """Initialize shared application state for the process lifetime."""
         resolved_settings = settings if settings is not None else get_settings()
+        configure_application_logging(resolved_settings)
         lens_service = build_lens_service(resolved_settings)
         application.state.settings = resolved_settings
         application.state.lens_service = lens_service

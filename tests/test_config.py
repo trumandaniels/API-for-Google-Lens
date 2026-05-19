@@ -17,6 +17,7 @@ class SettingsParsingTests(unittest.TestCase):
         self.assertEqual(settings.response_cache_max_entries, 512)
         self.assertEqual(settings.response_cache_ttl_seconds, 7200.0)
         self.assertFalse(settings.mrscraper_block_resources)
+        self.assertEqual(settings.log_level, "INFO")
 
     def test_parses_response_cache_settings(self) -> None:
         settings = parse_settings(
@@ -29,6 +30,26 @@ class SettingsParsingTests(unittest.TestCase):
 
         self.assertEqual(settings.response_cache_max_entries, 32)
         self.assertEqual(settings.response_cache_ttl_seconds, 120.5)
+
+
+    def test_parses_log_level_case_insensitively(self) -> None:
+        settings = parse_settings(
+            {
+                "MRSCRAPER_API_KEY": "atk_example",
+                "LOG_LEVEL": "debug",
+            }
+        )
+
+        self.assertEqual(settings.log_level, "DEBUG")
+
+    def test_rejects_unknown_log_level(self) -> None:
+        with self.assertRaisesRegex(ValueError, "LOG_LEVEL"):
+            parse_settings(
+                {
+                    "MRSCRAPER_API_KEY": "atk_example",
+                    "LOG_LEVEL": "verbose",
+                }
+            )
 
     def test_requires_mrscraper_api_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "MRSCRAPER_API_KEY"):

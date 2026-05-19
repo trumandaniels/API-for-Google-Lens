@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 DEFAULT_GOOGLE_BASE_URL = "https://lens.google.com/uploadbyurl"
 DEFAULT_MRSCRAPER_API_URL = "https://api.mrscraper.com"
+DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_CONCURRENCY = 16
 DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.0
@@ -47,9 +48,12 @@ class Settings(BaseModel):
         mrscraper_block_resources: Optional provider hint to block images,
             CSS, and fonts while rendering upstream HTML. Disabled by default
             because the measured Lens path was slower with it enabled.
+        log_level: Minimum application log level. Set LOG_LEVEL=DEBUG for
+            local diagnostics; keep production at INFO or higher.
     """
 
     google_base_url: str = Field(default=DEFAULT_GOOGLE_BASE_URL)
+    log_level: str = Field(default=DEFAULT_LOG_LEVEL)
     request_timeout_seconds: float = Field(default=DEFAULT_REQUEST_TIMEOUT_SECONDS, gt=0)
     max_concurrency: int = Field(default=DEFAULT_MAX_CONCURRENCY, gt=0)
     request_delay_min_seconds: float = Field(default=DEFAULT_REQUEST_DELAY_MIN_SECONDS, ge=0)
@@ -66,6 +70,27 @@ class Settings(BaseModel):
     mrscraper_api_key: str
     mrscraper_api_url: str = Field(default=DEFAULT_MRSCRAPER_API_URL)
     mrscraper_block_resources: bool = Field(default=DEFAULT_MRSCRAPER_BLOCK_RESOURCES)
+
+    @field_validator("log_level")
+    @classmethod
+    def parse_log_level(cls, value: str) -> str:
+        """Parse and constrain the configured application log level.
+
+        Args:
+            value: Candidate log level name.
+
+        Returns:
+            Uppercase log level name.
+
+        Raises:
+            ValueError: If the level is not one of Python standard levels.
+        """
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(
+                "LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
+            )
+        return normalized
 
     @field_validator("google_base_url")
     @classmethod
@@ -155,6 +180,7 @@ def parse_settings(environ: dict[str, str]) -> Settings:
     """
     return Settings(
         google_base_url=environ.get("GOOGLE_BASE_URL", DEFAULT_GOOGLE_BASE_URL),
+        log_level=environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         mrscraper_api_key=environ.get("MRSCRAPER_API_KEY", ""),
         mrscraper_api_url=environ.get(
             "MRSCRAPER_API_URL",

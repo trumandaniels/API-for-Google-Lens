@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import unittest
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.config import parse_settings
 from app.lens.direct import DirectLensResponse
 from app.lens.service import GoogleLensService
-from app.main import build_lens_service, create_app
+from app.main import build_lens_service, configure_application_logging, create_app
 from app.models import ImageUrl, ProviderApiToken
 from app.throttling import AsyncConcurrencyLimiter
 
@@ -57,6 +58,23 @@ class CountingLensClient:
 
 
 class ApiLifecycleTests(unittest.TestCase):
+
+    def test_configure_application_logging_uses_parsed_log_level(self) -> None:
+        settings = parse_settings(
+            {
+                "MRSCRAPER_API_KEY": "atk_example",
+                "LOG_LEVEL": "DEBUG",
+            }
+        )
+        logger = logging.getLogger("uvicorn.error")
+        original_level = logger.level
+
+        try:
+            configure_application_logging(settings)
+            self.assertEqual(logger.level, logging.DEBUG)
+        finally:
+            logger.setLevel(original_level)
+
     def test_lens_service_is_initialized_once_in_app_state(self) -> None:
         settings = parse_settings({"MRSCRAPER_API_KEY": "atk_example"})
         app = create_app(settings=settings)

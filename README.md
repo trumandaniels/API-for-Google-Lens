@@ -62,6 +62,19 @@ Set `HOST` to the hosted API above and `IMAGE` to any public image URL.
 curl "$HOST/google-lens?imageUrl=$IMAGE"
 ```
 
+Hosted Railway example with a caller-supplied MrScraper token:
+
+```bash
+HOST='https://api-for-google-lens-production.up.railway.app'
+IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+MRSCRAPER_API_KEY='atk_your_mrscraper_api_key'
+
+# health-check: curl --version
+curl \
+  -H "X-MrScraper-Api-Key: $MRSCRAPER_API_KEY" \
+  "$HOST/google-lens?imageUrl=$IMAGE"
+```
+
 Success:
 
 The success response is `200 OK` with `Content-Type: text/html`. The body is
@@ -88,10 +101,17 @@ IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
 mkdir -p .runtime/pages
 # health-check: curl --version
 curl --get \
+  --fail-with-body \
+  --show-error \
+  --silent \
   --data-urlencode "imageUrl=$IMAGE" \
+  --write-out "\nHTTP %{http_code} %{content_type} saved=%{filename_effective}\n" \
   http://127.0.0.1:8000/google-lens \
   -o .runtime/pages/latest-google-lens.html
 ```
+
+Expected success output ends with HTTP 200 text/html; curl exits nonzero
+for mapped API errors such as 402, 429, 502, or 504.
 
 Opening the API URL in a browser is usually the most faithful view. A saved
 Google HTML file can be useful for debugging, but some relative assets and
@@ -194,6 +214,18 @@ source .venv/bin/activate
 uvicorn app.main:app --reload
 ```
 
+Run locally with diagnostic server logs:
+
+```bash
+# health-check: test -f .venv/bin/activate
+source .venv/bin/activate
+LOG_LEVEL=DEBUG uvicorn app.main:app --reload
+```
+
+`LOG_LEVEL=DEBUG` affects server logs only. The public API response stays the
+same, so provider details and internal traces are not returned to remote
+callers.
+
 Quick local request:
 
 ```bash
@@ -204,6 +236,22 @@ curl 'http://127.0.0.1:8000/healthz'
 # health-check: curl --version
 curl "http://127.0.0.1:8000/google-lens?imageUrl=$IMAGE"
 ```
+
+Equivalent single scrape through the measurement script:
+
+```bash
+# health-check: python3 scripts/measure_lens_api.py --help
+python3 scripts/measure_lens_api.py \
+  --base-url http://127.0.0.1:8000 \
+  --image-url "$IMAGE" \
+  --requests 1 \
+  --concurrency 1 \
+  --timeout-seconds 90 \
+  --verbose
+```
+
+`--concurrency 1` means one request at a time. `--concurrency 0` is invalid
+because every scrape needs at least one worker slot.
 
 ## Configuration
 
@@ -216,6 +264,7 @@ MRSCRAPER_API_URL=https://api.mrscraper.com
 
 GOOGLE_BASE_URL=https://lens.google.com/uploadbyurl
 REQUEST_TIMEOUT_SECONDS=60.0
+LOG_LEVEL=INFO
 
 MAX_CONCURRENCY=16
 REQUEST_DELAY_MIN_SECONDS=0.0
@@ -229,7 +278,9 @@ USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 ```
 
 The app parses these once at startup. Process environment variables override
-matching `.env` values.
+matching `.env` values. Keep hosted production at `LOG_LEVEL=INFO` or higher;
+use `LOG_LEVEL=DEBUG` locally when you need provider-hop and request lifecycle
+diagnostics in the server logs.
 
 ## Verification
 
