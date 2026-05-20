@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.errors import BotBlockError, ProviderCreditsExhaustedError, UpstreamRequestError
+from app.errors import (
+    BotBlockError,
+    ExactMatchNotFoundError,
+    ProviderCreditsExhaustedError,
+    UpstreamRequestError,
+)
 from app.lens.direct import DirectLensResponse
 from app.lens.service import (
     PROVIDER_CREDIT_ERROR_DETAIL,
@@ -91,6 +96,29 @@ class ProviderCreditErrorTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("HTTP 503", context.exception.message)
+
+    async def test_service_rejects_exact_match_empty_state(self) -> None:
+        service = GoogleLensService(
+            client=StaticLensClient(
+                DirectLensResponse(
+                    html=(
+                        '<div aria-current="page" selected="" class="mXwfNd">'
+                        '<span class="R1QWuf">Exact matches</span></div>'
+                        "<h2>No matches for your search</h2>"
+                    ),
+                    final_url="https://www.google.com/search?udm=48",
+                    status_code=200,
+                )
+            ),  # type: ignore[arg-type]
+            limiter=AsyncConcurrencyLimiter(1),
+        )
+
+        with self.assertRaises(ExactMatchNotFoundError) as context:
+            await service.fetch_exact_match_html(
+                ImageUrl.parse("https://example.com/image.jpg")
+            )
+
+        self.assertIn("no matches", context.exception.message)
 
 
 if __name__ == "__main__":

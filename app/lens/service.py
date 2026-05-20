@@ -218,5 +218,7 @@ class GoogleLensService:
             raise BotBlockError("Google returned CAPTCHA or bot-check HTML")
         if classification.verdict == HtmlVerdict.GOOGLE_ERROR:
             raise GoogleErrorPageError("Google returned an error page")
+        if classification.verdict == HtmlVerdict.NO_MATCH:
+            raise ExactMatchNotFoundError("Google Exact Match page contained no matches")
 
         raise ExactMatchNotFoundError("Google response was not Exact Match HTML")

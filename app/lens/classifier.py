@@ -16,6 +16,7 @@ class HtmlVerdict(StrEnum):
     """
 
     EXACT_MATCH = "exact_match"
+    NO_MATCH = "no_match"
     BOT_BLOCK = "bot_block"
     GOOGLE_ERROR = "google_error"
     UNKNOWN = "unknown"
@@ -57,6 +58,13 @@ EXACT_MATCH_MARKERS = (
     "Exact matches",
     "Visual matches",
     "Search Results",
+)
+
+NO_MATCH_MARKERS = (
+    "No matches for your search",
+    "try changing the search area or submitting another image",
+    "Tidak ada kecocokan untuk penelusuran Anda",
+    "coba ubah area penelusuran atau kirim gambar lain",
 )
 
 EXACT_MATCH_TAB_LABELS = frozenset(
@@ -102,15 +110,19 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     if not html.strip():
         return HtmlClassification(HtmlVerdict.UNKNOWN, "empty HTML body")
 
+    normalized_html = html.lower()
     lower_url = final_url.lower()
     if "google.com/sorry" in lower_url:
         return HtmlClassification(HtmlVerdict.BOT_BLOCK, "Google sorry URL")
 
-    if any(marker.lower() in html.lower() for marker in BOT_BLOCK_MARKERS):
+    if any(marker.lower() in normalized_html for marker in BOT_BLOCK_MARKERS):
         return HtmlClassification(HtmlVerdict.BOT_BLOCK, "bot-block marker present")
 
-    if any(marker.lower() in html.lower() for marker in GOOGLE_ERROR_MARKERS):
+    if any(marker.lower() in normalized_html for marker in GOOGLE_ERROR_MARKERS):
         return HtmlClassification(HtmlVerdict.GOOGLE_ERROR, "Google error marker present")
+
+    if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
+        return HtmlClassification(HtmlVerdict.NO_MATCH, "Exact Match page has no matches")
 
     selected_tab = SELECTED_TAB_PATTERN.search(html)
     if selected_tab is not None:
@@ -120,7 +132,7 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
         if label in NON_EXACT_SELECTED_TAB_LABELS:
             return HtmlClassification(HtmlVerdict.UNKNOWN, f"{label.title()} tab selected")
 
-    if "udm=48" in lower_url and "exact matches" in html.lower() and "search results" in html.lower():
+    if "udm=48" in lower_url and "exact matches" in normalized_html and "search results" in normalized_html:
         return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match URL and markers present")
 
     return HtmlClassification(HtmlVerdict.UNKNOWN, "Exact Match markers absent")
