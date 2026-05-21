@@ -66,7 +66,7 @@ Hosted Railway example with a caller-supplied MrScraper token:
 
 ```bash
 HOST='https://api-for-google-lens-production.up.railway.app'
-IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
+IMAGE='https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg'
 MRSCRAPER_API_KEY='atk_your_mrscraper_api_key'
 
 # health-check: curl --version
@@ -98,7 +98,7 @@ saved HTML file. `curl --get --data-urlencode` handles image URLs that contain
 characters like `?`, `&`, or `$`.
 
 ```bash
-IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
+IMAGE='https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg'
 
 # health-check: mkdir --help
 mkdir -p .runtime/pages
@@ -231,7 +231,7 @@ callers.
 Quick local request:
 
 ```bash
-IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
+IMAGE='https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg'
 
 # health-check: curl --version
 curl 'http://127.0.0.1:8000/healthz'
@@ -299,18 +299,38 @@ Small hosted measurement:
 python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url "$IMAGE" --requests 5 --concurrency 2 --min-valid-exact 1 --max-average-latency-seconds 60 --max-error-rate 0.5
 ```
 
+Find image URLs that return valid Exact Match HTML with result content:
+
+```bash
+# health-check: python3 scripts/measure_lens_api.py --help
+# Use the local API by default, or set HOST to the hosted API URL.
+HOST="${HOST:-http://127.0.0.1:8000}"
+python3 scripts/measure_lens_api.py \
+  --base-url "$HOST" \
+  --image-url-file tests/fixtures/image_urls/small.txt \
+  --requests 5 \
+  --concurrency 1 \
+  --successful-image-url-file .runtime/successful-image-urls.txt \
+  --print-successful-image-urls \
+  --response-html-dir .runtime/pages/lens-measure-debug
+```
+
+Use `tests/fixtures/image_urls/small.txt` when you specifically want examples
+that are more likely to produce Exact Match result cards. Use
+`tests/fixtures/image_urls/large.txt` for load measurements.
+
 167-request load estimate:
 
 ```bash
 # health-check: python3 scripts/measure_lens_api.py --help
-python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 167 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516
+python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file tests/fixtures/image_urls/large.txt --requests 167 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516
 ```
 
 Full one-hour profile:
 
 ```bash
 # health-check: python3 scripts/measure_lens_api.py --help
-python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file path/to/image-urls.txt --requests 1000 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516 --target challenge
+python3 scripts/measure_lens_api.py --base-url "$HOST" --image-url-file tests/fixtures/image_urls/large.txt --requests 1000 --concurrency 16 --rate-per-minute 16.7 --randomize-image-urls --image-url-seed 20260516 --target challenge
 ```
 
 Measurement artifacts are written under `.runtime/runs/lens-measure-*`.

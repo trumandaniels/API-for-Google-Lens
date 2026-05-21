@@ -15,7 +15,7 @@ Example:
 Challenge-style run:
     python3 scripts/measure_lens_api.py \\
         --base-url https://your-host.example \\
-        --image-url-file .runtime/live-image-urls.txt \\
+        --image-url-file tests/fixtures/image_urls/large.txt \\
         --requests 1000 \\
         --concurrency 4 \\
         --rate-per-minute 16.7 \\
@@ -24,7 +24,7 @@ Challenge-style run:
 Credit-conscious five-minute estimate:
     python3 scripts/measure_lens_api.py \\
         --base-url https://your-host.example \\
-        --image-url-file .runtime/live-image-urls.txt \\
+        --image-url-file tests/fixtures/image_urls/large.txt \\
         --requests 84 \\
         --concurrency 4 \\
         --rate-per-minute 16.7 \\
@@ -43,12 +43,13 @@ import os
 from pathlib import Path
 import random
 import statistics
+import sys
 import time
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from app.config import parse_env_file
-from app.lens.classifier import HtmlVerdict, classify_google_html
+from app.lens.classifier import HtmlVerdict, NO_MATCH_MARKERS, classify_google_html
 from app.observability import (
     configure_logging,
     get_measurement_logger,
@@ -61,6 +62,7 @@ CHALLENGE_MAX_AVERAGE_LATENCY_SECONDS = 60.0
 CHALLENGE_MAX_ERROR_RATE = 0.10
 FIVE_MINUTE_PROJECTION_MULTIPLIER = 12.0
 LOGGER = get_measurement_logger()
+MAX_ERROR_DETAIL_COUNTS = 8
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,10 @@ class MeasurementResult:
         latency_seconds: End-to-end API latency.
         verdict: Response verdict used for aggregate metrics.
         html_verdict: HTML classifier verdict when a response body exists.
+        has_result_content: Whether the response appears to contain Exact
+            Match result content rather than Google's no-match empty state.
+        response_body_path: Optional diagnostic path containing the response
+            body for this request.
         error: Short failure description, if any.
     """
 
@@ -84,6 +90,8 @@ class MeasurementResult:
     latency_seconds: float
     verdict: str
     html_verdict: str
+    has_result_content: bool | None = None
+    response_body_path: str | None = None
     error: str | None = None
 
 
@@ -137,6 +145,30 @@ def load_image_urls(image_urls: list[str], image_url_file: Path | None) -> list[
     if not loaded_urls:
         raise ValueError("at least one --image-url or --image-url-file entry is required")
     return loaded_urls
+
+
+def parse_base_url(raw_value: str) -> str:
+    """Parse and require an HTTP API base URL.
+
+    Args:
+        raw_value: Candidate API base URL from CLI arguments.
+
+    Returns:
+        Normalized base URL without a trailing slash.
+
+    Raises:
+        ValueError: If the URL is empty, relative, hostless, or non-HTTP.
+    """
+
+    stripped = raw_value.strip()
+    if not stripped:
+        raise ValueError("--base-url must not be empty; set HOST or pass a URL")
+    parsed = urlparse(stripped)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("--base-url must start with http:// or https://")
+    if not parsed.netloc:
+        raise ValueError("--base-url must include a host")
+    return stripped.rstrip("/")
 
 
 def build_image_url_schedule(
@@ -218,6 +250,50 @@ def classify_response(status_code: int, body: str, final_url: str) -> tuple[str,
     return "http_error", html_verdict
 
 
+def response_has_no_match_empty_state(body: str) -> bool:
+    """Return whether response HTML contains Google's no-match empty state.
+
+    Args:
+        body: Response body returned by the measured API.
+
+    Returns:
+        `True` when a known no-match marker is present.
+    """
+
+    normalized_body = body.lower()
+    return any(marker.lower() in normalized_body for marker in NO_MATCH_MARKERS)
+
+
+def write_response_body_sample(
+    output_dir: Path,
+    index: int,
+    status_code: int,
+    verdict: str,
+    html_verdict: str,
+    body: str,
+) -> Path:
+    """Write one response body for diagnostic inspection.
+
+    Args:
+        output_dir: Directory where response bodies should be written.
+        index: Request index.
+        status_code: HTTP status code returned by the API.
+        verdict: Aggregate measurement verdict.
+        html_verdict: HTML classifier verdict.
+        body: Response body to persist.
+
+    Returns:
+        Path to the written response body.
+    """
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_verdict = verdict.replace("/", "_")
+    safe_html_verdict = html_verdict.replace("/", "_")
+    path = output_dir / f"{index:04d}-{status_code}-{safe_verdict}-{safe_html_verdict}.html"
+    path.write_text(body, encoding="utf-8", errors="replace")
+    return path
+
+
 def summarize_error_detail(status_code: int, body: str, verdict: str) -> str | None:
     """Return a short API-safe error detail for failed measurements.
 
@@ -252,6 +328,30 @@ def summarize_error_detail(status_code: int, body: str, verdict: str) -> str | N
     return compact or None
 
 
+def summarize_error_details(results: list[MeasurementResult]) -> list[dict[str, Any]]:
+    """Summarize repeated failure details across a measurement run.
+
+    Args:
+        results: Per-request measurements.
+
+    Returns:
+        Most common non-empty error details with counts.
+    """
+
+    counts: dict[str, int] = {}
+    for result in results:
+        if result.error is None:
+            continue
+        counts[result.error] = counts.get(result.error, 0) + 1
+    return [
+        {"detail": detail, "count": count}
+        for detail, count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:MAX_ERROR_DETAIL_COUNTS]
+    ]
+
+
 def summarize_results(
     results: list[MeasurementResult],
     thresholds: Thresholds | None,
@@ -279,6 +379,14 @@ def summarize_results(
     total = len(results)
     latencies = [result.latency_seconds for result in results]
     valid_exact = sum(result.verdict == "valid_exact_match" for result in results)
+    valid_with_result_content = sum(
+        result.verdict == "valid_exact_match" and result.has_result_content is True
+        for result in results
+    )
+    valid_no_match_empty_state = sum(
+        result.verdict == "valid_exact_match" and result.has_result_content is False
+        for result in results
+    )
     invalid_2xx = sum(result.verdict == "invalid_2xx" for result in results)
     bot_blocks = sum(result.verdict == "bot_block" for result in results)
     http_errors = sum(result.verdict == "http_error" for result in results)
@@ -288,6 +396,8 @@ def summarize_results(
     metrics: dict[str, Any] = {
         "totalRequests": total,
         "validExactMatchCount": valid_exact,
+        "validExactMatchWithResultContentCount": valid_with_result_content,
+        "validExactMatchNoMatchEmptyStateCount": valid_no_match_empty_state,
         "invalid2xxCount": invalid_2xx,
         "botBlockCount": bot_blocks,
         "httpErrorCount": http_errors,
@@ -306,6 +416,12 @@ def summarize_results(
             "projectionMultiplier": projection_multiplier,
             "totalRequests": round(total * projection_multiplier),
             "validExactMatchCount": round(valid_exact * projection_multiplier),
+            "validExactMatchWithResultContentCount": round(
+                valid_with_result_content * projection_multiplier
+            ),
+            "validExactMatchNoMatchEmptyStateCount": round(
+                valid_no_match_empty_state * projection_multiplier
+            ),
             "invalid2xxCount": round(invalid_2xx * projection_multiplier),
             "botBlockCount": round(bot_blocks * projection_multiplier),
             "httpErrorCount": round(http_errors * projection_multiplier),
@@ -329,6 +445,12 @@ def summarize_results(
             "requestsPerMinute": total / (elapsed_seconds / 60.0),
             "totalRequests": round(total * observed_multiplier),
             "validExactMatchCount": round(valid_exact * observed_multiplier),
+            "validExactMatchWithResultContentCount": round(
+                valid_with_result_content * observed_multiplier
+            ),
+            "validExactMatchNoMatchEmptyStateCount": round(
+                valid_no_match_empty_state * observed_multiplier
+            ),
             "invalid2xxCount": round(invalid_2xx * observed_multiplier),
             "botBlockCount": round(bot_blocks * observed_multiplier),
             "httpErrorCount": round(http_errors * observed_multiplier),
@@ -366,6 +488,7 @@ def summarize_results(
 
     return {
         "checks": checks,
+        "errorDetails": summarize_error_details(results),
         "metrics": metrics,
         "observedHourChallengeChecks": observed_hour_checks,
         "observedHourChallengePassed": observed_hour_passed,
@@ -382,6 +505,7 @@ async def measure_one(
     image_url: str,
     index: int,
     request_headers: dict[str, str] | None = None,
+    response_html_dir: Path | None = None,
 ) -> MeasurementResult:
     """Measure one `/google-lens` request.
 
@@ -391,6 +515,7 @@ async def measure_one(
         image_url: Image URL to submit.
         index: Request index.
         request_headers: Optional HTTP headers to send with the API request.
+        response_html_dir: Optional directory for diagnostic response bodies.
 
     Returns:
         Per-request measurement.
@@ -414,6 +539,22 @@ async def measure_one(
             response.text,
             verdict,
         )
+        has_result_content = (
+            verdict == "valid_exact_match"
+            and not response_has_no_match_empty_state(response.text)
+        )
+        response_body_path = None
+        if response_html_dir is not None:
+            response_body_path = str(
+                write_response_body_sample(
+                    response_html_dir,
+                    index,
+                    response.status_code,
+                    verdict,
+                    html_verdict,
+                    response.text,
+                )
+            )
         return MeasurementResult(
             index=index,
             image_url_hash=hash_url(image_url),
@@ -421,6 +562,8 @@ async def measure_one(
             latency_seconds=latency,
             verdict=verdict,
             html_verdict=html_verdict,
+            has_result_content=has_result_content,
+            response_body_path=response_body_path,
             error=error_detail,
         )
     except Exception as error:
@@ -432,6 +575,7 @@ async def measure_one(
             latency_seconds=latency,
             verdict="network_error",
             html_verdict="unknown",
+            has_result_content=False,
             error=type(error).__name__,
         )
 
@@ -444,6 +588,7 @@ async def run_measurement(
     rate_per_minute: float | None,
     timeout_seconds: float,
     request_headers: dict[str, str] | None = None,
+    response_html_dir: Path | None = None,
 ) -> list[MeasurementResult]:
     """Run a latency and validity measurement set.
 
@@ -456,6 +601,7 @@ async def run_measurement(
             concurrency allows.
         timeout_seconds: Per-request client timeout.
         request_headers: Optional HTTP headers to send with every API request.
+        response_html_dir: Optional directory for diagnostic response bodies.
 
     Returns:
         Per-request measurements.
@@ -488,6 +634,7 @@ async def run_measurement(
                     image_url,
                     index,
                     request_headers,
+                    response_html_dir,
                 )
                 results.append(result)
                 log_measurement_result(result)
@@ -516,6 +663,55 @@ def write_jsonl(path: Path, results: list[MeasurementResult]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def collect_successful_image_urls(
+    results: list[MeasurementResult],
+    image_url_schedule: list[str],
+) -> list[str]:
+    """Return unique image URLs that produced Exact Match result content.
+
+    Args:
+        results: Per-request measurements sorted by request index.
+        image_url_schedule: Per-request raw image URLs used for the run.
+
+    Returns:
+        Raw image URLs whose corresponding request returned valid Exact Match
+        HTML without a detected no-match empty state, deduplicated in
+        first-success order.
+
+    Raises:
+        ValueError: If a result index is outside the image URL schedule.
+    """
+
+    successful_urls: list[str] = []
+    seen_urls: set[str] = set()
+    for result in results:
+        if result.verdict != "valid_exact_match":
+            continue
+        if result.has_result_content is False:
+            continue
+        if result.index < 0 or result.index >= len(image_url_schedule):
+            raise ValueError("measurement result index is outside the image URL schedule")
+        image_url = image_url_schedule[result.index]
+        if image_url in seen_urls:
+            continue
+        successful_urls.append(image_url)
+        seen_urls.add(image_url)
+    return successful_urls
+
+
+def write_successful_image_urls(path: Path, image_urls: list[str]) -> None:
+    """Write successful raw image URLs as one URL per line.
+
+    Args:
+        path: Output text file path.
+        image_urls: Raw image URLs to write.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(image_urls)
+    path.write_text(body + ("\n" if body else ""), encoding="utf-8")
+
+
 def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) -> str:
     """Render a compact human-readable measurement report."""
 
@@ -523,6 +719,7 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
     observed_hour_estimate = summary["observedHourEstimate"]
     projected_hour_estimate = summary["projectedHourEstimate"]
     thresholds = summary["thresholds"]
+    error_details = summary["errorDetails"]
     lines = [
         "# Google Lens API Measurement",
         "",
@@ -531,10 +728,19 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
         f"- Requests: `{metrics['totalRequests']}`",
         f"- Concurrency: `{run_config['concurrency']}`",
         f"- Rate per minute: `{run_config['ratePerMinute']}`",
+        f"- Successful image URL count: `{run_config['successfulImageUrlCount']}`",
         "",
         "## Metrics",
         "",
         f"- Valid Exact Match responses: `{metrics['validExactMatchCount']}`",
+        (
+            "- Valid Exact Match responses with result content: "
+            f"`{metrics['validExactMatchWithResultContentCount']}`"
+        ),
+        (
+            "- Valid Exact Match no-match empty states: "
+            f"`{metrics['validExactMatchNoMatchEmptyStateCount']}`"
+        ),
         f"- Valid Exact Match rate: `{metrics['validExactMatchRate']:.3f}`",
         f"- Error rate: `{metrics['errorRate']:.3f}`",
         f"- Average latency seconds: `{metrics['averageLatencySeconds']:.3f}`",
@@ -545,6 +751,10 @@ def render_markdown_report(summary: dict[str, Any], run_config: dict[str, Any]) 
         f"- HTTP errors: `{metrics['httpErrorCount']}`",
         f"- Invalid 2xx responses: `{metrics['invalid2xxCount']}`",
     ]
+    if error_details:
+        lines.extend(["", "## Error Details", ""])
+        for item in error_details:
+            lines.append(f"- `{item['count']}` x {item['detail']}")
     if projected_hour_estimate is not None:
         lines.extend(
             [
@@ -660,6 +870,32 @@ def parse_args() -> argparse.Namespace:
             "to measurement artifacts."
         ),
     )
+    parser.add_argument(
+        "--successful-image-url-file",
+        type=Path,
+        help=(
+            "Optional output file for raw image URLs that returned valid Exact "
+            "Match HTML with detected result content. Use this only for "
+            "diagnostic runs where raw URL artifacts are acceptable."
+        ),
+    )
+    parser.add_argument(
+        "--print-successful-image-urls",
+        action="store_true",
+        help=(
+            "Print raw image URLs that returned valid Exact Match HTML with "
+            "detected result content at the end of the run."
+        ),
+    )
+    parser.add_argument(
+        "--response-html-dir",
+        type=Path,
+        help=(
+            "Optional diagnostic directory for response bodies. This can write "
+            "large raw Google HTML files and should be used only for local "
+            "debugging."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -769,6 +1005,7 @@ async def async_main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     merged_environ = {**parse_env_file(repo_root / ".env"), **os.environ}
     request_headers = resolve_request_headers(args.mrscraper_api_key_env, merged_environ)
+    base_url = parse_base_url(args.base_url)
     image_urls = load_image_urls(args.image_url, args.image_url_file)
     image_url_schedule = build_image_url_schedule(
         image_urls,
@@ -788,7 +1025,7 @@ async def async_main() -> int:
             "measurement_started base_url=%s requests=%s concurrency=%s "
             "rate_per_minute=%s timeout_seconds=%.1f output_dir=%s"
         ),
-        args.base_url,
+        base_url,
         args.requests,
         args.concurrency,
         args.rate_per_minute,
@@ -796,13 +1033,14 @@ async def async_main() -> int:
         output_dir,
     )
     results = await run_measurement(
-        base_url=args.base_url,
+        base_url=base_url,
         image_url_schedule=image_url_schedule,
         request_count=args.requests,
         concurrency=args.concurrency,
         rate_per_minute=args.rate_per_minute,
         timeout_seconds=args.timeout_seconds,
         request_headers=request_headers,
+        response_html_dir=args.response_html_dir,
     )
     elapsed_seconds = time.perf_counter() - wall_started
     finished_at = utc_timestamp()
@@ -812,8 +1050,9 @@ async def async_main() -> int:
         projection_multiplier,
         elapsed_seconds,
     )
+    successful_image_urls = collect_successful_image_urls(results, image_url_schedule)
     run_config = {
-        "baseUrl": args.base_url,
+        "baseUrl": base_url,
         "concurrency": args.concurrency,
         "finishedAt": finished_at,
         "imageUrlCount": len(image_urls),
@@ -826,7 +1065,14 @@ async def async_main() -> int:
         "randomizeImageUrls": args.randomize_image_urls,
         "ratePerMinute": args.rate_per_minute,
         "requestCount": args.requests,
+        "responseHtmlDir": str(args.response_html_dir) if args.response_html_dir else None,
         "startedAt": started_at,
+        "successfulImageUrlCount": len(successful_image_urls),
+        "successfulImageUrlFile": (
+            str(args.successful_image_url_file)
+            if args.successful_image_url_file is not None
+            else None
+        ),
         "target": args.target,
         "timeoutSeconds": args.timeout_seconds,
         "verbose": args.verbose,
@@ -848,12 +1094,33 @@ async def async_main() -> int:
         },
     )
     write_jsonl(output_dir / "samples.jsonl", results)
+    if args.successful_image_url_file is not None:
+        write_successful_image_urls(args.successful_image_url_file, successful_image_urls)
     (output_dir / "report.md").write_text(
         render_markdown_report(summary, run_config),
         encoding="utf-8",
     )
 
     print(f"Measurement artifacts: {output_dir}")
+    if args.response_html_dir is not None:
+        print(f"Response HTML samples: {args.response_html_dir}")
+    if args.successful_image_url_file is not None:
+        print(
+            "Successful image URLs with result content: "
+            f"{len(successful_image_urls)} saved to {args.successful_image_url_file}"
+        )
+    if args.print_successful_image_urls:
+        print("Successful image URLs with result content:")
+        for image_url in successful_image_urls:
+            print(image_url)
+    print(
+        "Valid Exact Match pages with result content: "
+        f"{summary['metrics']['validExactMatchWithResultContentCount']}"
+    )
+    print(
+        "Valid Exact Match no-match empty states: "
+        f"{summary['metrics']['validExactMatchNoMatchEmptyStateCount']}"
+    )
     print(json.dumps(summary["metrics"], indent=2))
     LOGGER.info(
         "measurement_finished passed=%s valid_exact_match=%s error_rate=%.3f "
@@ -868,5 +1135,15 @@ async def async_main() -> int:
     return 0
 
 
+def main() -> int:
+    """Run the command-line entry point."""
+
+    try:
+        return asyncio.run(async_main())
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(async_main()))
+    raise SystemExit(main())

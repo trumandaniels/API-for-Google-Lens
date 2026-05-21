@@ -1,0 +1,9 @@
+# Small public image URL set for smoke and result-content diagnostics.
+#
+# Use this list when you want a quick run with images that are more likely than
+# generated placeholders to have mirrored Exact Match result cards.
+https://upload.wikimedia.org/wikipedia/commons/7/70/Example.png
+https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg
+https://commons.wikimedia.org/wiki/Special:FilePath/Apollo%2011%20Lunar%20Module%20Eagle%20in%20landing%20configuration%20in%20lunar%20orbit%20from%20the%20Command%20and%20Service%20Module%20Columbia.jpg
+https://commons.wikimedia.org/wiki/Special:FilePath/Eiffel%20Tower%20from%20the%20Tour%20Montparnasse%203%2C%20Paris%20May%202014.jpg
+https://commons.wikimedia.org/wiki/Special:FilePath/Mount%20Rushmore%20detail%20view%20%28100MP%29.jpg

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from argparse import Namespace
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -109,11 +110,150 @@ class MeasureLensApiTests(unittest.TestCase):
                 "--image-url",
                 "https://example.com/image.jpg",
                 "--verbose",
+                "--successful-image-url-file",
+                ".runtime/successful-image-urls.txt",
+                "--print-successful-image-urls",
+                "--response-html-dir",
+                ".runtime/pages/debug",
             ],
         ):
             args = measure_lens_api.parse_args()
 
         self.assertTrue(args.verbose)
+        self.assertEqual(
+            args.successful_image_url_file,
+            Path(".runtime/successful-image-urls.txt"),
+        )
+        self.assertTrue(args.print_successful_image_urls)
+        self.assertEqual(args.response_html_dir, Path(".runtime/pages/debug"))
+
+    def test_parse_base_url_rejects_empty_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            measure_lens_api.parse_base_url("")
+
+    def test_parse_base_url_requires_http_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "http"):
+            measure_lens_api.parse_base_url("localhost:8000")
+
+    def test_parse_base_url_normalizes_trailing_slash(self) -> None:
+        self.assertEqual(
+            measure_lens_api.parse_base_url(" http://127.0.0.1:8000/ "),
+            "http://127.0.0.1:8000",
+        )
+
+    def test_collects_successful_image_urls_by_result_index(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=1,
+                image_url_hash="b",
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+                has_result_content=True,
+            ),
+            measure_lens_api.MeasurementResult(
+                index=2,
+                image_url_hash="c",
+                status_code=502,
+                latency_seconds=1.0,
+                verdict="http_error",
+                html_verdict="unknown",
+                has_result_content=False,
+            ),
+            measure_lens_api.MeasurementResult(
+                index=3,
+                image_url_hash="b2",
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+                has_result_content=True,
+            ),
+            measure_lens_api.MeasurementResult(
+                index=4,
+                image_url_hash="d",
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+                has_result_content=False,
+            ),
+        ]
+        schedule = [
+            "https://example.com/a.jpg",
+            "https://example.com/b.jpg",
+            "https://example.com/c.jpg",
+            "https://example.com/b.jpg",
+            "https://example.com/empty.jpg",
+        ]
+
+        successful_urls = measure_lens_api.collect_successful_image_urls(
+            results,
+            schedule,
+        )
+
+        self.assertEqual(successful_urls, ["https://example.com/b.jpg"])
+
+    def test_detects_no_match_empty_state_for_result_content_tracking(self) -> None:
+        self.assertTrue(
+            measure_lens_api.response_has_no_match_empty_state(
+                "<h2>No matches for your search</h2>"
+            )
+        )
+        self.assertFalse(
+            measure_lens_api.response_has_no_match_empty_state(
+                "<h2>Exact matches</h2><img src='result.jpg'>"
+            )
+        )
+
+    def test_measure_one_writes_response_body_sample_when_requested(self) -> None:
+        class FakeResponse:
+            status_code = 200
+            text = (
+                '<div aria-current="page" selected="" class="mXwfNd">'
+                '<span class="R1QWuf">Exact matches</span></div>'
+                "<a class='NDNGvf' href='https://example.com/result'></a>"
+            )
+            url = "http://127.0.0.1:8000/google-lens"
+
+        class FakeClient:
+            async def get(self, endpoint_url, params, headers):
+                return FakeResponse()
+
+        output_dir = REPO_ROOT / ".runtime" / "test-response-html"
+        result = asyncio.run(
+            measure_lens_api.measure_one(
+                FakeClient(),
+                "http://127.0.0.1:8000/google-lens",
+                "https://example.com/image.jpg",
+                7,
+                response_html_dir=output_dir,
+            )
+        )
+
+        self.assertTrue(result.has_result_content)
+        self.assertIsNotNone(result.response_body_path)
+        assert result.response_body_path is not None
+        self.assertIn("Exact matches", Path(result.response_body_path).read_text())
+
+    def test_rejects_successful_image_url_result_outside_schedule(self) -> None:
+        results = [
+            measure_lens_api.MeasurementResult(
+                index=4,
+                image_url_hash="e",
+                status_code=200,
+                latency_seconds=1.0,
+                verdict="valid_exact_match",
+                html_verdict="exact_match",
+            )
+        ]
+
+        with self.assertRaisesRegex(ValueError, "outside"):
+            measure_lens_api.collect_successful_image_urls(
+                results,
+                ["https://example.com/a.jpg"],
+            )
 
     def test_verbose_result_log_uses_image_url_hash(self) -> None:
         raw_url = "https://example.com/private-image.jpg"
@@ -151,6 +291,7 @@ class MeasureLensApiTests(unittest.TestCase):
                 latency_seconds=3.0,
                 verdict="http_error",
                 html_verdict="unknown",
+                error="Provider or Google returned HTTP 503",
             ),
             measure_lens_api.MeasurementResult(
                 index=2,
@@ -172,10 +313,16 @@ class MeasureLensApiTests(unittest.TestCase):
         self.assertTrue(summary["passed"])
         self.assertEqual(summary["metrics"]["totalRequests"], 3)
         self.assertEqual(summary["metrics"]["validExactMatchCount"], 1)
+        self.assertEqual(summary["metrics"]["validExactMatchWithResultContentCount"], 0)
+        self.assertEqual(summary["metrics"]["validExactMatchNoMatchEmptyStateCount"], 0)
         self.assertEqual(summary["metrics"]["invalid2xxCount"], 1)
         self.assertAlmostEqual(summary["metrics"]["averageLatencySeconds"], 2.0)
         self.assertEqual(summary["metrics"]["errorCount"], 2)
         self.assertAlmostEqual(summary["metrics"]["errorRate"], 2 / 3)
+        self.assertEqual(
+            summary["errorDetails"],
+            [{"count": 1, "detail": "Provider or Google returned HTTP 503"}],
+        )
         self.assertIsNone(summary["projectedHourEstimate"])
 
     def test_summarizes_projected_hour_estimate(self) -> None:
@@ -199,6 +346,10 @@ class MeasureLensApiTests(unittest.TestCase):
 
         self.assertEqual(summary["projectedHourEstimate"]["totalRequests"], 24)
         self.assertEqual(summary["projectedHourEstimate"]["validExactMatchCount"], 24)
+        self.assertEqual(
+            summary["projectedHourEstimate"]["validExactMatchWithResultContentCount"],
+            0,
+        )
         self.assertEqual(summary["projectedHourEstimate"]["errorRate"], 0.0)
 
     def test_summarizes_observed_hour_estimate_from_elapsed_time(self) -> None:

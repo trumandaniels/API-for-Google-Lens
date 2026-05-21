@@ -245,6 +245,7 @@ tests/test_lint_index.py
 docs/README.md
 harness.json
 docs/challenge/SPEC.md
+docs/exact-match-candidate-image-urls.txt
 scripts/lint_readmes.py
 tests/test_lint_readmes.py
 tests/test_run_harness.py
