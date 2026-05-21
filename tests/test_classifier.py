@@ -68,7 +68,7 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
 
         self.assertEqual(classification.verdict, HtmlVerdict.GOOGLE_ERROR)
 
-    def test_detects_exact_match_no_results_empty_state(self) -> None:
+    def test_accepts_exact_match_no_results_empty_state(self) -> None:
         html = (
             '<div aria-current="page" selected="" class="mXwfNd">'
             '<span class="R1QWuf">Exact matches</span></div>'
@@ -79,9 +79,9 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
 
         classification = classify_google_html(html)
 
-        self.assertEqual(classification.verdict, HtmlVerdict.NO_MATCH)
+        self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
 
-    def test_detects_localized_exact_match_no_results_empty_state(self) -> None:
+    def test_accepts_localized_exact_match_no_results_empty_state(self) -> None:
         html = (
             '<div aria-current="page" selected="" class="mXwfNd">'
             '<span class="R1QWuf">Kecocokan persis</span></div>'
@@ -89,6 +89,13 @@ class GoogleHtmlClassifierTests(unittest.TestCase):
             "<p>Untuk mendapatkan hasil yang lebih baik, coba ubah area "
             "penelusuran atau kirim gambar lain</p>"
         )
+
+        classification = classify_google_html(html)
+
+        self.assertEqual(classification.verdict, HtmlVerdict.EXACT_MATCH)
+
+    def test_detects_unanchored_no_results_empty_state(self) -> None:
+        html = "<h2>No matches for your search</h2>"
 
         classification = classify_google_html(html)
 

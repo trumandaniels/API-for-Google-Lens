@@ -66,7 +66,7 @@ Hosted Railway example with a caller-supplied MrScraper token:
 
 ```bash
 HOST='https://api-for-google-lens-production.up.railway.app'
-IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
 MRSCRAPER_API_KEY='atk_your_mrscraper_api_key'
 
 # health-check: curl --version
@@ -78,7 +78,10 @@ curl \
 Success:
 
 The success response is `200 OK` with `Content-Type: text/html`. The body is
-the raw Google Lens Exact Match HTML.
+the raw Google Lens Exact Match HTML. If Google reaches the Exact Match tab but
+shows its "No matches for your search" empty state, the API still returns that
+HTML with `200`; it is the requested Exact Match page, just without result
+cards.
 
 ## Viewing Retrieved HTML
 
@@ -95,7 +98,7 @@ saved HTML file. `curl --get --data-urlencode` handles image URLs that contain
 characters like `?`, `&`, or `$`.
 
 ```bash
-IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
 
 # health-check: mkdir --help
 mkdir -p .runtime/pages
@@ -228,7 +231,7 @@ callers.
 Quick local request:
 
 ```bash
-IMAGE='https://i.ebayimg.com/00/s/MTYwMFgxNjAw/z/BVcAAOSwS-9m4zOb/$_57.JPG'
+IMAGE='https://katespade.scene7.com/is/image/KateSpade/KP070_001?$desktopProductV5$'
 
 # health-check: curl --version
 curl 'http://127.0.0.1:8000/healthz'

@@ -121,18 +121,31 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     if any(marker.lower() in normalized_html for marker in GOOGLE_ERROR_MARKERS):
         return HtmlClassification(HtmlVerdict.GOOGLE_ERROR, "Google error marker present")
 
-    if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
-        return HtmlClassification(HtmlVerdict.NO_MATCH, "Exact Match page has no matches")
-
     selected_tab = SELECTED_TAB_PATTERN.search(html)
     if selected_tab is not None:
         label = selected_tab.group("label").strip().lower()
         if label in EXACT_MATCH_TAB_LABELS:
+            if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
+                return HtmlClassification(
+                    HtmlVerdict.EXACT_MATCH,
+                    "Exact Match tab selected with no matches",
+                )
             return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match tab selected")
         if label in NON_EXACT_SELECTED_TAB_LABELS:
             return HtmlClassification(HtmlVerdict.UNKNOWN, f"{label.title()} tab selected")
 
     if "udm=48" in lower_url and "exact matches" in normalized_html and "search results" in normalized_html:
         return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match URL and markers present")
+
+    if "udm=48" in lower_url and any(
+        marker.lower() in normalized_html for marker in NO_MATCH_MARKERS
+    ):
+        return HtmlClassification(
+            HtmlVerdict.EXACT_MATCH,
+            "Exact Match URL has no matches",
+        )
+
+    if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
+        return HtmlClassification(HtmlVerdict.NO_MATCH, "No-match marker present")
 
     return HtmlClassification(HtmlVerdict.UNKNOWN, "Exact Match markers absent")
