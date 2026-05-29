@@ -107,10 +107,10 @@ curl --get \
   --fail-with-body \
   --show-error \
   --silent \
-  --data-urlencode "imageUrl=$IMAGE" \
+  --output .runtime/pages/latest-google-lens.html \
   --write-out "\nHTTP %{http_code} %{content_type} saved=%{filename_effective}\n" \
-  http://127.0.0.1:8000/google-lens \
-  -o .runtime/pages/latest-google-lens.html
+  --data-urlencode "imageUrl=$IMAGE" \
+  http://127.0.0.1:8000/google-lens
 ```
 
 Expected success output ends with HTTP 200 text/html; curl exits nonzero

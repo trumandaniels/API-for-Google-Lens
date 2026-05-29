@@ -26,9 +26,12 @@ class DirectLensResponse:
     """Raw direct Google response before HTML classification.
 
     Attributes:
-        html: Upstream response body.
-        final_url: Final URL after redirects.
+        html: Upstream response body returned by the final provider hop.
+        final_url: Google URL represented by the final provider hop.
         status_code: Upstream HTTP status code.
+        entry_html: Optional first-hop Lens results page retained for
+            diagnostics; the service still returns the Exact Match hop.
+        entry_url: Optional Google Lens entry URL used for the first hop.
 
     Example:
         >>> DirectLensResponse("<html></html>", "https://www.google.com/search?udm=48", 200).status_code
@@ -38,6 +41,8 @@ class DirectLensResponse:
     html: str
     final_url: str
     status_code: int
+    entry_html: str | None = None
+    entry_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +381,8 @@ class DirectLensClient:
                 raise UpstreamRequestError("Google Lens request failed") from error
 
         response = await get(request_url, headers, "lens_entry")
+        entry_html = response.text
+        entry_url = upstream_url
         exact_url = self.find_exact_match_tab_url(response.text)
         if exact_url is not None:
             final_url = exact_url
@@ -389,4 +396,6 @@ class DirectLensClient:
             html=response.text,
             final_url=final_url,
             status_code=response.status_code,
+            entry_html=entry_html,
+            entry_url=entry_url,
         )

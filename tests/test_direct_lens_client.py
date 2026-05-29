@@ -19,6 +19,31 @@ class TimeoutHttpClient:
         raise httpx.TimeoutException("timed out")
 
 
+class FakeResponse:
+    """Minimal HTTP response used by direct-client async tests."""
+
+    def __init__(self, text: str, status_code: int = 200) -> None:
+        """Store fake response text and HTTP metadata."""
+        self.text = text
+        self.status_code = status_code
+        self.content = text.encode("utf-8")
+        self.http_version = "HTTP/1.1"
+
+
+class RecordingHttpClient:
+    """HTTP client test double that returns queued responses."""
+
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        """Store responses and record requested URLs."""
+        self.responses = responses
+        self.requested_urls: list[str] = []
+
+    async def get(self, url: str, headers: dict[str, str]) -> FakeResponse:
+        """Record the requested URL and return the next fake response."""
+        self.requested_urls.append(url)
+        return self.responses.pop(0)
+
+
 class DirectLensClientTests(unittest.TestCase):
     def test_builds_google_lens_upload_by_url_request(self) -> None:
         client = DirectLensClient(
@@ -198,6 +223,34 @@ class DirectLensClientAsyncTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("lens_provider_hop_timeout hop=lens_entry", "\n".join(logs.output))
+
+    async def test_fetches_exact_match_hop_when_tab_url_exists(self) -> None:
+        entry_html = (
+            '<div aria-current="page" selected="" class="mXwfNd">'
+            '<span class="R1QWuf">All</span></div>'
+            '<a href="/search?udm=48&amp;vsrid=abc">Exact matches</a>'
+        )
+        exact_html = (
+            '<div aria-current="page" selected="" class="mXwfNd">'
+            '<span class="R1QWuf">Exact matches</span></div>'
+        )
+        http_client = RecordingHttpClient([FakeResponse(entry_html), FakeResponse(exact_html)])
+        client = DirectLensClient(
+            google_base_url="https://lens.google.com/uploadbyurl",
+            timeout_seconds=30,
+            user_agent="test-agent",
+            mrscraper_api_key="atk_example",
+            http_client=http_client,
+        )
+
+        result = await client.fetch_exact_match_html(
+            ImageUrl.parse("https://example.com/image.jpg")
+        )
+
+        self.assertEqual(result.html, exact_html)
+        self.assertEqual(result.entry_html, entry_html)
+        self.assertEqual(len(http_client.requested_urls), 2)
+        self.assertIn("udm%3D48", http_client.requested_urls[1])
 
 
 if __name__ == "__main__":

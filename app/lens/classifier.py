@@ -89,6 +89,43 @@ SELECTED_TAB_PATTERN = re.compile(
 )
 
 
+def contains_no_match_empty_state(html: str) -> bool:
+    """Return whether HTML contains a Google Lens no-result empty state.
+
+    Args:
+        html: Raw Google HTML body.
+
+    Returns:
+        `True` when any known localized no-match marker is present.
+
+    Example:
+        >>> contains_no_match_empty_state("<h2>No matches for your search</h2>")
+        True
+    """
+    normalized_html = html.lower()
+    return any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS)
+
+
+def selected_lens_tab_label(html: str) -> str | None:
+    """Return the selected Lens tab label from Google HTML, if present.
+
+    Args:
+        html: Raw Google Lens/Search HTML.
+
+    Returns:
+        Lowercase selected tab label, or `None` when the page shape does not
+        include the expected selected-tab marker.
+
+    Example:
+        >>> selected_lens_tab_label('<div aria-current="page" selected="" class="mXwfNd"><span class="R1QWuf">Semua</span></div>')
+        'semua'
+    """
+    selected_tab = SELECTED_TAB_PATTERN.search(html)
+    if selected_tab is None:
+        return None
+    return selected_tab.group("label").strip().lower()
+
+
 def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     """Classify an upstream Google response body.
 
@@ -121,11 +158,10 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     if any(marker.lower() in normalized_html for marker in GOOGLE_ERROR_MARKERS):
         return HtmlClassification(HtmlVerdict.GOOGLE_ERROR, "Google error marker present")
 
-    selected_tab = SELECTED_TAB_PATTERN.search(html)
-    if selected_tab is not None:
-        label = selected_tab.group("label").strip().lower()
+    label = selected_lens_tab_label(html)
+    if label is not None:
         if label in EXACT_MATCH_TAB_LABELS:
-            if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
+            if contains_no_match_empty_state(html):
                 return HtmlClassification(
                     HtmlVerdict.EXACT_MATCH,
                     "Exact Match tab selected with no matches",
@@ -137,15 +173,13 @@ def classify_google_html(html: str, final_url: str = "") -> HtmlClassification:
     if "udm=48" in lower_url and "exact matches" in normalized_html and "search results" in normalized_html:
         return HtmlClassification(HtmlVerdict.EXACT_MATCH, "Exact Match URL and markers present")
 
-    if "udm=48" in lower_url and any(
-        marker.lower() in normalized_html for marker in NO_MATCH_MARKERS
-    ):
+    if "udm=48" in lower_url and contains_no_match_empty_state(html):
         return HtmlClassification(
             HtmlVerdict.EXACT_MATCH,
             "Exact Match URL has no matches",
         )
 
-    if any(marker.lower() in normalized_html for marker in NO_MATCH_MARKERS):
+    if contains_no_match_empty_state(html):
         return HtmlClassification(HtmlVerdict.NO_MATCH, "No-match marker present")
 
     return HtmlClassification(HtmlVerdict.UNKNOWN, "Exact Match markers absent")
